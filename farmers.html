@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SeedIQ — Farmer & Fields</title>
+<meta name="description" content="Customer farm and field workspace" />
+<link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">Seed<span>IQ</span></div>
+    <div class="subbrand">Seed Intelligence & Sales Platform</div>
+    <nav><a href="index.html" class="">Dashboard</a>
+<a href="farmers.html" class="active">Farmer & Fields</a>
+<a href="field-analysis.html" class="">Field Analysis</a>
+<a href="whole-farm-plan.html" class="">Whole-Farm Plan</a>
+<a href="genetics.html" class="">Seed Genetics</a>
+<a href="prospects.html" class="">Prospect Intelligence</a>
+<a href="sales-packet.html" class="">Sales Packet Builder</a>
+<a href="pipeline.html" class="">Sales Pipeline</a>
+<a href="product-spec.html" class="">Product Spec</a></nav>
+    <div class="side-card"><b>Interactive Prototype</b><br><br>All farmer, soil, weather, hybrid, pipeline and performance data in this demo is fictional sample data.</div>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div><div class="muted" style="font-size:12px">Prairie Ridge Seed • Dealer & Agronomy Portal</div></div><div class="logo-row"><span class="pill"><i class="dot"></i> Engine Online</span><div class="avatar">CW</div></div></div>
+    <div class="workflow"><span class="muted" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em">Workflow</span><a href="prospects.html" class="">Prospect</a><span class="muted">›</span><a href="farmers.html" class="current">Farm & Fields</a><span class="muted">›</span><a href="field-analysis.html" class="">Analyze</a><span class="muted">›</span><a href="whole-farm-plan.html" class="">Plan</a><span class="muted">›</span><a href="sales-packet.html" class="">Proposal</a><span class="muted">›</span><a href="pipeline.html" class="">Pipeline</a></div>
+    <section class="page-section" id="farmer">
+<h1>Wilson Farms</h1>
+<p class="muted">Beattie, Kansas • 2,860 total acres • Conventional tillage / dryland dominant</p>
+<div class="grid cols">
+<div class="card">
+<h2>Farm Map</h2>
+<div class="map"><div class="map-label">Sample field boundary visualization<br/><b>North 80 • 74 acres</b></div></div>
+</div>
+<div class="card">
+<h2>Fields</h2>
+<div class="field-list">
+<div class="field active"><div class="row"><b>North 80</b><span>74 ac</span></div><small class="muted">Corn • Corn/Soy rotation</small></div>
+<div class="field"><div class="row"><b>West Quarter</b><span>151 ac</span></div><small class="muted">Corn • Continuous corn</small></div>
+<div class="field"><div class="row"><b>Creek Bottom</b><span>96 ac</span></div><small class="muted">Corn • Corn/Soy rotation</small></div>
+<div class="field"><div class="row"><b>Home Place</b><span>133 ac</span></div><small class="muted">Corn • Corn/Soy rotation</small></div>
+</div>
+<button class="btn primary" onclick="goto('analysis')" style="margin-top:15px;width:100%">Analyze North 80</button>
+</div>
+</div>
+</section>
+    <p class="footer-note">SeedIQ prototype • All data shown is fictional/sample data for product-concept discussion only.</p>
+  </main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

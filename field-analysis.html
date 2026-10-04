@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SeedIQ — Field Analysis</title>
+<meta name="description" content="Soil, weather, risk and genetic fit analysis" />
+<link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">Seed<span>IQ</span></div>
+    <div class="subbrand">Seed Intelligence & Sales Platform</div>
+    <nav><a href="index.html" class="">Dashboard</a>
+<a href="farmers.html" class="">Farmer & Fields</a>
+<a href="field-analysis.html" class="active">Field Analysis</a>
+<a href="whole-farm-plan.html" class="">Whole-Farm Plan</a>
+<a href="genetics.html" class="">Seed Genetics</a>
+<a href="prospects.html" class="">Prospect Intelligence</a>
+<a href="sales-packet.html" class="">Sales Packet Builder</a>
+<a href="pipeline.html" class="">Sales Pipeline</a>
+<a href="product-spec.html" class="">Product Spec</a></nav>
+    <div class="side-card"><b>Interactive Prototype</b><br><br>All farmer, soil, weather, hybrid, pipeline and performance data in this demo is fictional sample data.</div>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div><div class="muted" style="font-size:12px">Prairie Ridge Seed • Dealer & Agronomy Portal</div></div><div class="logo-row"><span class="pill"><i class="dot"></i> Engine Online</span><div class="avatar">CW</div></div></div>
+    <div class="workflow"><span class="muted" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em">Workflow</span><a href="prospects.html" class="">Prospect</a><span class="muted">›</span><a href="farmers.html" class="">Farm & Fields</a><span class="muted">›</span><a href="field-analysis.html" class="current">Analyze</a><span class="muted">›</span><a href="whole-farm-plan.html" class="">Plan</a><span class="muted">›</span><a href="sales-packet.html" class="">Proposal</a><span class="muted">›</span><a href="pipeline.html" class="">Pipeline</a></div>
+    <section class="page-section" id="analysis">
+<div style="display:flex;justify-content:space-between;gap:15px;align-items:flex-start">
+<div><h1>North 80 — Genetic Placement</h1><p class="muted">Wilson Farms • 74 acres • Dryland corn • Yield goal 205 bu/ac</p></div>
+<button class="btn outline" onclick="alert('Sample report generated in prototype mode.')">Generate Farmer Report</button>
+</div>
+<div class="grid cols2">
+<div class="card">
+<h2>Field Risk Profile</h2>
+<div class="riskbar"><div class="riskrow"><span>Drought stress</span><div class="bar"><i style="width:82%"></i></div><b>82</b></div></div>
+<div class="riskbar"><div class="riskrow"><span>July heat</span><div class="bar"><i style="width:74%"></i></div><b>74</b></div></div>
+<div class="riskbar"><div class="riskrow"><span>Low AWC</span><div class="bar"><i style="width:87%"></i></div><b>87</b></div></div>
+<div class="riskbar"><div class="riskrow"><span>Root lodging</span><div class="bar"><i style="width:61%"></i></div><b>61</b></div></div>
+<div class="riskbar"><div class="riskrow"><span>Excess moisture</span><div class="bar"><i style="width:38%"></i></div><b>38</b></div></div>
+<div class="riskbar"><div class="riskrow"><span>Disease pressure</span><div class="bar"><i style="width:54%"></i></div><b>54</b></div></div>
+<hr style="border:0;border-top:1px solid var(--line);margin:18px 0"/>
+<div class="grid cols3">
+<div><small class="muted">Dominant soil</small><b style="display:block">Wymore Silty Clay</b></div>
+<div><small class="muted">AWC</small><b style="display:block">Moderate-Low</b></div>
+<div><small class="muted">10-yr July rain</small><b style="display:block">3.2 in</b></div>
+</div>
+</div>
+<div class="card">
+<h2>Engine Inputs</h2>
+<table class="table">
+<tbody>
+<tr><td>Soil compatibility</td><td><b>25%</b></td></tr>
+<tr><td>Weather compatibility</td><td><b>25%</b></td></tr>
+<tr><td>Yield environment</td><td><b>15%</b></td></tr>
+<tr><td>Disease compatibility</td><td><b>10%</b></td></tr>
+<tr><td>Maturity fit</td><td><b>10%</b></td></tr>
+<tr><td>Population response</td><td><b>5%</b></td></tr>
+<tr><td>Rotation fit</td><td><b>5%</b></td></tr>
+<tr><td>Management fit</td><td><b>5%</b></td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="grid cols" style="margin-top:16px">
+<div class="card">
+<h2>Ranked Genetics</h2>
+<div class="recommendation top">
+<div class="rec-head"><div><small class="muted">#1 Recommended</small><h2 style="margin:2px 0 4px">PRS 112-45</h2><span class="tag good">Drought 9/10</span><span class="tag good">Roots 9/10</span><span class="tag good">Tar Spot 8/10</span><span class="tag">112 RM</span></div><div class="score"><b>93%</b><span>Field Fit</span></div></div>
+<p style="font-size:13px;line-height:1.5;margin:12px 0 8px"><b>Why it wins:</b> Strong drought package, high root strength and excellent performance on moderate-to-low water-holding soils offset its average emergence score.</p>
+<div><span class="tag good">Strong: drought tolerance</span><span class="tag good">Strong: root strength</span><span class="tag warn">Watch: cold/wet emergence</span></div>
+</div>
+<div class="recommendation"><div class="rec-head"><div><small class="muted">#2</small><h3 style="margin:2px 0">PRS 110-22</h3><span class="tag">110 RM</span><span class="tag good">Emergence 9/10</span></div><div class="score"><b>89%</b><span>Fit</span></div></div><p style="font-size:12px;margin:8px 0 0">Excellent emergence and solid stress tolerance, but lower yield ceiling on this field.</p></div>
+<div class="recommendation"><div class="rec-head"><div><small class="muted">#3</small><h3 style="margin:2px 0">PRS 113-18</h3><span class="tag">113 RM</span><span class="tag good">Yield 10/10</span></div><div class="score"><b>84%</b><span>Fit</span></div></div><p style="font-size:12px;margin:8px 0 0">Highest upside, but carries more July moisture and root-lodging risk.</p></div>
+</div>
+<div class="card">
+<h2>AI Agronomist</h2>
+<div class="chat">
+<div class="bubble"><div class="prompt">Dealer:</div> Why did 112-45 beat 113-18?</div>
+<div class="bubble"><div class="prompt">SeedIQ AI:</div> 113-18 has the greater yield ceiling, but North 80 has below-average available water capacity and a high frequency of July moisture stress. 112-45's stronger drought and root scores are a better match for this field's risk profile, producing a higher overall fit score.</div>
+<div class="bubble"><div class="prompt">Dealer:</div> What if the farmer wants maximum upside?</div>
+<div class="bubble"><div class="prompt">SeedIQ AI:</div> Increasing the yield-ceiling weight moves 113-18 closer to the top, but it remains a higher-risk placement. A split placement could preserve upside while limiting concentration risk.</div>
+</div>
+<button class="btn secondary" onclick="document.getElementById('override').classList.toggle('hidden')" style="margin-top:12px;width:100%">Dealer Override</button>
+<div class="hidden" id="override" style="margin-top:12px;padding:12px;border:1px dashed #aac0b0;border-radius:12px">
+<b>Override recommendation</b><p class="muted" style="font-size:12px;margin:5px 0 10px">Capture dealer knowledge to improve future scoring.</p>
+<select style="width:100%;padding:9px;border:1px solid var(--line);border-radius:8px"><option>Select reason...</option><option>Local disease concern</option><option>Hybrid performs poorly on this soil</option><option>Inventory constraint</option><option>Customer preference</option><option>Dealer field experience</option></select>
+</div>
+</div>
+</div>
+</section>
+    <p class="footer-note">SeedIQ prototype • All data shown is fictional/sample data for product-concept discussion only.</p>
+  </main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

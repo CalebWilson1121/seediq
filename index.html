@@ -1,7 +1,74 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard | SeedIQ</title><link rel="stylesheet" href="assets/css/app.css"></head><body data-page="dashboard"><div class="shell"><aside class="sidebar"><div class="brand">Seed<span>IQ</span></div><div class="brand-sub">Seed Intelligence & Sales Platform</div><nav class="nav"><a data-nav="dashboard" href="index.html"><span class="icon">⌂</span>Dashboard</a><a data-nav="prospects" href="pages/prospects.html"><span class="icon">◎</span>Prospects</a><a data-nav="analysis" href="pages/farm-analysis.html"><span class="icon">▦</span>Farm Analysis</a><a data-nav="genetics" href="pages/genetic-fit.html"><span class="icon">◈</span>Genetic Fit</a><a data-nav="plan" href="pages/whole-farm-plan.html"><span class="icon">▤</span>Whole-Farm Plan</a><a data-nav="builder" href="pages/packet-builder.html"><span class="icon">✦</span>Packet Builder</a><a data-nav="packet" href="pages/sales-packet.html"><span class="icon">▧</span>Sales Packet</a><a data-nav="pipeline" href="pages/pipeline.html"><span class="icon">↗</span>Pipeline</a><a data-nav="library" href="pages/genetics-library.html"><span class="icon">≋</span>Genetics Library</a></nav><div class="side-note"><b>Prototype environment</b><br><br>All farms, hybrids, soil, weather, pricing and performance data are fictional sample data.</div></aside><main class="main"><div class="topbar"><div class="crumb">Prairie Ridge Seed • Northeast Kansas</div><div class="user"><span class="pill"><i class="dot"></i> Sample data</span><div class="avatar">MK</div></div></div>
-<section class="hero"><div class="row between wrap"><div><div class="eyebrow" style="color:#a9d4b4">Saturday priorities</div><h1>Know the field. Place the genetics. Win the acres.</h1><p class="muted" style="max-width:760px">SeedIQ combines field intelligence, agronomic placement and sales enablement so agronomists and seed sellers can move from prospect to field-specific recommendation to polished proposal without stitching together five different tools.</p></div><div class="actions"><a class="btn secondary" href="pages/prospects.html">Open Prospect Workspace →</a></div></div></section>
-<div class="stepper"><div class="step active"><b>1. Find opportunity</b>Prospect / customer</div><div class="step"><b>2. Understand acres</b>Field intelligence</div><div class="step"><b>3. Match genetics</b>Fit scoring</div><div class="step"><b>4. Build plan</b>Allocate acres & bags</div><div class="step"><b>5. Tell the story</b>Sales packet</div><div class="step"><b>6. Close & track</b>Pipeline</div></div>
-<div class="grid g4"><div class="card kpi"><span class="eyebrow">Customers</span><strong>127</strong><small>84,620 managed acres</small></div><div class="card kpi"><span class="eyebrow">Open prospects</span><strong>34</strong><small>18,940 target corn acres</small></div><div class="card kpi"><span class="eyebrow">Proposal pipeline</span><strong>$1.84M</strong><small>Estimated seed revenue</small></div><div class="card kpi"><span class="eyebrow">Placement complete</span><strong>92%</strong><small>416 fields analyzed</small></div></div>
-<div class="grid g-main" style="margin-top:16px"><section class="card"><div class="row between"><div><h2>Today’s agronomy priorities</h2><p class="muted">Places where field data suggests the seed plan deserves attention.</p></div><a class="btn outline" href="pages/farm-analysis.html">Open field analysis</a></div><table class="table"><thead><tr><th>Account</th><th>Signal</th><th>Acres</th><th>Action</th></tr></thead><tbody><tr><td><b>Wilson Farms</b><br><small class="muted">North 80</small></td><td><span class="tag warn">Drought exposure</span></td><td>74</td><td><a class="btn ghost" href="pages/genetic-fit.html">Review genetics →</a></td></tr><tr><td><b>Meyer Farms</b><br><small class="muted">River Bottom</small></td><td><span class="tag blue">Wet-foot risk</span></td><td>122</td><td><a class="btn ghost" href="pages/farm-analysis.html">Review field →</a></td></tr><tr><td><b>Hartman Ag</b><br><small class="muted">Home Quarter</small></td><td><span class="tag warn">Maturity concentration</span></td><td>154</td><td><a class="btn ghost" href="pages/whole-farm-plan.html">Balance plan →</a></td></tr></tbody></table></section><aside class="card"><h2>Sales opportunities</h2><div class="list"><div class="insight"><b>Wilson Farms • $214k</b><small class="muted">Proposal ready. 1,840 corn acres / 736 estimated bags.</small><div style="margin-top:8px"><a class="btn primary" href="pages/packet-builder.html">Build packet</a></div></div><div class="insight"><b>Olson Family Farms</b><small class="muted">1,250 target corn acres. No field-level proposal yet.</small></div><div class="insight"><b>Brady Brothers</b><small class="muted">Competitive replacement opportunity; disease package is the stated pain point.</small></div></div></aside></div>
-<div class="card" style="margin-top:16px"><h2>How the platform fits the seed team</h2><div class="grid g3"><div class="insight"><b>Agronomist</b><small class="muted">Validates soils, weather risk, genetic placement and field-specific agronomic logic.</small></div><div class="insight"><b>Sales rep</b><small class="muted">Turns analysis into prospect talking points, tailored proposals and bag opportunities.</small></div><div class="insight"><b>Sales leader</b><small class="muted">Sees analyzed acres, packet activity, pipeline, product demand and opportunity movement.</small></div></div></div>
-</main></div><script src="assets/js/app.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SeedIQ — Dealer Dashboard</title>
+<meta name="description" content="Dealer placement intelligence and seed sales enablement" />
+<link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">Seed<span>IQ</span></div>
+    <div class="subbrand">Seed Intelligence & Sales Platform</div>
+    <nav><a href="index.html" class="active">Dashboard</a>
+<a href="farmers.html" class="">Farmer & Fields</a>
+<a href="field-analysis.html" class="">Field Analysis</a>
+<a href="whole-farm-plan.html" class="">Whole-Farm Plan</a>
+<a href="genetics.html" class="">Seed Genetics</a>
+<a href="prospects.html" class="">Prospect Intelligence</a>
+<a href="sales-packet.html" class="">Sales Packet Builder</a>
+<a href="pipeline.html" class="">Sales Pipeline</a>
+<a href="product-spec.html" class="">Product Spec</a></nav>
+    <div class="side-card"><b>Interactive Prototype</b><br><br>All farmer, soil, weather, hybrid, pipeline and performance data in this demo is fictional sample data.</div>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div><div class="muted" style="font-size:12px">Prairie Ridge Seed • Dealer & Agronomy Portal</div></div><div class="logo-row"><span class="pill"><i class="dot"></i> Engine Online</span><div class="avatar">CW</div></div></div>
+    
+    <section class="page-section" id="dashboard">
+<h1>Good morning, Caleb.</h1>
+<p class="muted">Your dealer-wide placement intelligence at a glance.</p>
+<div class="grid kpis">
+<div class="card kpi"><span>Farmers</span><strong>127</strong><span>+8 this season</span></div>
+<div class="card kpi"><span>Managed Acres</span><strong>84,620</strong><span>41,350 corn acres</span></div>
+<div class="card kpi"><span>Active Hybrids</span><strong>42</strong><span>6 maturity groups</span></div>
+<div class="card kpi"><span>Fields Analyzed</span><strong>416</strong><span>92% complete</span></div>
+</div>
+<div class="grid cols">
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center"><div><h2>Recent Placement Analyses</h2><p class="muted">Highest-priority customer work.</p></div><button class="btn primary" onclick="window.location.href='field-analysis.html'">Run Placement</button></div>
+<table class="table">
+<thead><tr><th>Farmer</th><th>Field</th><th>Acres</th><th>Top Hybrid</th><th>Fit</th></tr></thead>
+<tbody>
+<tr><td>Wilson Farms</td><td>North 80</td><td>74</td><td>PRS 112-45</td><td><b>93%</b></td></tr>
+<tr><td>Meyer Farms</td><td>River Bottom</td><td>122</td><td>PRS 114-18</td><td><b>91%</b></td></tr>
+<tr><td>Hartman Ag</td><td>Home Quarter</td><td>154</td><td>PRS 110-22</td><td><b>89%</b></td></tr>
+<tr><td>Olson Family Farms</td><td>West 160</td><td>148</td><td>PRS 108-12</td><td><b>88%</b></td></tr>
+</tbody>
+</table>
+</div>
+<div class="card">
+<h2>AI Dealer Opportunities</h2>
+<p class="muted">Signals found across your current customer base.</p>
+<div class="recommendation top"><b>18 fields</b><p style="margin:5px 0 0;font-size:13px">High drought exposure with below-average AWC. Review defensive hybrids before final order.</p></div>
+<div class="recommendation"><b>11 fields</b><p style="margin:5px 0 0;font-size:13px">Maturity concentration above target. Diversification may reduce harvest bottleneck.</p></div>
+<div class="recommendation"><b>7 customers</b><p style="margin:5px 0 0;font-size:13px">Current seed plan leaves &gt;25% of acres in moderate root-lodging risk.</p></div>
+</div>
+</div>
+<div class="card" style="margin-top:16px">
+<h2>Placement Workflow</h2>
+<div class="timeline">
+<div class="step"><b>1. Map Field</b><small>Draw, upload, or import boundaries.</small></div>
+<div class="step"><b>2. Build Risk Profile</b><small>Soils + NOAA climate + management.</small></div>
+<div class="step"><b>3. Rank Genetics</b><small>Deterministic fit scoring engine.</small></div>
+<div class="step"><b>4. Explain &amp; Order</b><small>AI explanation + farmer-ready plan.</small></div>
+</div>
+</div>
+</section>
+    <p class="footer-note">SeedIQ prototype • All data shown is fictional/sample data for product-concept discussion only.</p>
+  </main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

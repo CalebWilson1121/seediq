@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
 DB_PATH = Path(__file__).with_name("seediq.db")
 
-SCHEMA = """
+SQLITE_SCHEMA = """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS farms (
@@ -38,24 +39,6 @@ CREATE TABLE IF NOT EXISTS fields (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS crop_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-  field_id INTEGER REFERENCES fields(id) ON DELETE CASCADE,
-  crop_year INTEGER,
-  crop TEXT,
-  practice TEXT,
-  planted_acres REAL,
-  production REAL,
-  yield_value REAL,
-  approved_yield REAL,
-  coverage_level REAL,
-  unit_structure TEXT,
-  metadata_json TEXT DEFAULT '{}',
-  source_document_id INTEGER,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   farm_id INTEGER REFERENCES farms(id) ON DELETE SET NULL,
@@ -71,6 +54,24 @@ CREATE TABLE IF NOT EXISTS documents (
   raw_preview TEXT,
   uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
   parsed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS crop_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+  field_id INTEGER REFERENCES fields(id) ON DELETE CASCADE,
+  crop_year INTEGER,
+  crop TEXT,
+  practice TEXT,
+  planted_acres REAL,
+  production REAL,
+  yield_value REAL,
+  approved_yield REAL,
+  coverage_level REAL,
+  unit_structure TEXT,
+  metadata_json TEXT DEFAULT '{}',
+  source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS source_facts (
@@ -142,24 +143,73 @@ CREATE TABLE IF NOT EXISTS ai_events (
 """
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def backend_name() -> str:
+    return "supabase-postgres" if os.getenv("POSTGRES_URL") else "sqlite-local"
+
+
+def _postgres_connection():
+    import psycopg
+    from psycopg.rows import dict_row
+
+    return psycopg.connect(os.environ["POSTGRES_URL"], row_factory=dict_row)
+
+
+class ConnectionAdapter:
+    def __init__(self):
+        self.is_postgres = bool(os.getenv("POSTGRES_URL"))
+        if self.is_postgres:
+            self.conn = _postgres_connection()
+        else:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            self.conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.conn.commit()
+        else:
+            self.conn.rollback()
+        self.conn.close()
+
+    def _query(self, sql: str) -> str:
+        return sql.replace("?", "%s") if self.is_postgres else sql
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        return self.conn.execute(self._query(sql), params)
+
+    def executescript(self, sql: str):
+        if self.is_postgres:
+            raise RuntimeError("executescript is only used for local SQLite initialization")
+        return self.conn.executescript(sql)
+
+
+def connect() -> ConnectionAdapter:
+    return ConnectionAdapter()
 
 
 def init_db() -> None:
+    # Production schema is managed through Supabase migrations. Local development
+    # keeps the zero-config SQLite fallback so the repo can still run offline.
+    if os.getenv("POSTGRES_URL"):
+        return
     with connect() as conn:
-        conn.executescript(SCHEMA)
+        conn.executescript(SQLITE_SCHEMA)
 
 
-def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
-    return dict(row) if row is not None else None
+def row_to_dict(row: Any | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row
+    return dict(row)
 
 
-def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
-    return [dict(r) for r in rows]
+def rows_to_dicts(rows: Iterable[Any]) -> list[dict[str, Any]]:
+    return [row_to_dict(r) or {} for r in rows]
 
 
 def json_dumps(value: Any) -> str:

@@ -44,7 +44,6 @@ def _storage_enabled() -> bool:
 
 
 def _store_source_document(temp_path: Path, original_name: str, sha: str) -> str:
-    """Persist the original source once. Supabase Storage in production, disk locally."""
     safe_name = Path(original_name).name.replace("/", "_")
     object_path = f"source/{sha[:2]}/{sha}-{safe_name}"
 
@@ -60,10 +59,8 @@ def _store_source_document(temp_path: Path, original_name: str, sha: str) -> str
         }
         with temp_path.open("rb") as handle:
             response = httpx.post(url, headers=headers, content=handle.read(), timeout=60)
-        if response.status_code not in (200, 201):
-            # Object may already exist if a prior DB write failed after upload.
-            if response.status_code != 409:
-                raise RuntimeError(f"Supabase Storage upload failed ({response.status_code}): {response.text[:300]}")
+        if response.status_code not in (200, 201) and response.status_code != 409:
+            raise RuntimeError(f"Supabase Storage upload failed ({response.status_code}): {response.text[:300]}")
         return f"supabase://seediq-documents/{object_path}"
 
     UPLOAD_DIR.mkdir(exist_ok=True)
@@ -81,17 +78,43 @@ def _insert_id(conn, sql: str, params: tuple) -> int:
     return int(cur.lastrowid)
 
 
+def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> int | None:
+    if parsed.document_type != "APH":
+        return None
+    prospect_name = (parsed.producer_name or parsed.farm_name or "Imported Prospect").strip()
+    total_acres = round(sum(float(f.acres or 0) for f in parsed.fields), 2)
+    crops = sorted({str(f.crop).strip() for f in parsed.fields if f.crop})
+    metadata = {
+        "created_from": "aph_upload",
+        "carrier": "NAU Country" if any((f.metadata or {}).get("carrier") == "NAU Country" for f in parsed.fields) else None,
+        "unit_count": len(parsed.fields),
+        "aph_year_rows": len(parsed.crop_records),
+        "policy_number": parsed.policy_number,
+    }
+    conn.execute(
+        "INSERT INTO prospects(farm_id,source_document_id,prospect_name,status,source,total_acres,crops_json,metadata_json) "
+        "VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb) "
+        "ON CONFLICT(farm_id) DO UPDATE SET "
+        "source_document_id=excluded.source_document_id, prospect_name=excluded.prospect_name, "
+        "total_acres=excluded.total_acres, crops_json=excluded.crops_json, metadata_json=excluded.metadata_json, updated_at=CURRENT_TIMESTAMP",
+        (farm_id, document_id, prospect_name, "new", "aph_upload", total_acres, json_dumps(crops), json_dumps(metadata)),
+    )
+    row = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (farm_id,)).fetchone()
+    return int(row["id"]) if row else None
+
+
 def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = None) -> dict[str, Any]:
     sha = sha256_file(temp_path)
 
-    # Duplicate check happens before parsing or uploading. Read once really means once.
     with connect() as conn:
         existing = conn.execute("SELECT * FROM documents WHERE sha256=?", (sha,)).fetchone()
         if existing:
+            prospect = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (existing["farm_id"],)).fetchone()
             return {
                 "duplicate": True,
                 "document_id": existing["id"],
                 "farm_id": existing["farm_id"],
+                "prospect_id": int(prospect["id"]) if prospect else None,
                 "status": existing["status"],
                 "storage": existing["stored_path"],
             }
@@ -116,17 +139,9 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             "INSERT INTO documents(farm_id,original_name,stored_path,sha256,mime_type,document_type,status,parser_name,parser_version,warnings_json,raw_preview,parsed_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
             (
-                farm_id,
-                original_name,
-                stored_path,
-                sha,
-                mimetypes.guess_type(original_name)[0],
-                parsed.document_type,
-                "parsed",
-                parser_name,
-                PARSER_VERSION,
-                json_dumps(parsed.warnings),
-                parsed.raw_preview,
+                farm_id, original_name, stored_path, sha, mimetypes.guess_type(original_name)[0],
+                parsed.document_type, "parsed", parser_name, PARSER_VERSION,
+                json_dumps(parsed.warnings), parsed.raw_preview,
             ),
         )
 
@@ -142,7 +157,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 "name=excluded.name, acres=COALESCE(excluded.acres,fields.acres), "
                 "county=COALESCE(excluded.county,fields.county), state=COALESCE(excluded.state,fields.state), "
                 "crop=COALESCE(excluded.crop,fields.crop), practice=COALESCE(excluded.practice,fields.practice), "
-                "irrigation=COALESCE(excluded.irrigation,fields.irrigation), updated_at=CURRENT_TIMESTAMP",
+                "irrigation=COALESCE(excluded.irrigation,fields.irrigation), metadata_json=excluded.metadata_json, updated_at=CURRENT_TIMESTAMP",
                 (
                     farm_id, field_key, f.name, f.acres, f.county, f.state, f.farm_number,
                     f.tract_number, f.field_number, f.crop, f.practice, f.irrigation, json_dumps(f.metadata),
@@ -150,6 +165,8 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             )
             field_row = conn.execute("SELECT id FROM fields WHERE field_key=?", (field_key,)).fetchone()
             field_id_by_key[local_key] = int(field_row["id"])
+            if f.field_number:
+                field_id_by_key[str(f.field_number)] = int(field_row["id"])
 
         for r in parsed.crop_records:
             field_id = field_id_by_key.get(r.field_key)
@@ -174,10 +191,13 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 ),
             )
 
+        prospect_id = _upsert_prospect(conn, farm_id, document_id, parsed)
+
     return {
         "duplicate": False,
         "document_id": document_id,
         "farm_id": farm_id,
+        "prospect_id": prospect_id,
         "document_type": parsed.document_type,
         "parser": parser_name,
         "fields_created_or_updated": len(parsed.fields),

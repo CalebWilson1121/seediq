@@ -1,0 +1,4 @@
+Producer,Farm Name,Policy Number,County,State,Farm Number,Tract Number,Field Number,Field Name,Crop,Practice,Acres,Crop Year,Production,Yield,Approved Yield,Coverage Level,Unit Structure
+Caleb Sample,Wilson Farms,POL-1001,Nemaha,KS,101,55,1,North 80,Corn,NIRR,74,2025,11840,160,166,80,EU
+Caleb Sample,Wilson Farms,POL-1001,Nemaha,KS,101,55,1,North 80,Corn,NIRR,74,2024,12580,170,166,80,EU
+Caleb Sample,Wilson Farms,POL-1001,Nemaha,KS,101,55,2,Home 120,Corn,NIRR,118,2025,19470,165,171,80,EU

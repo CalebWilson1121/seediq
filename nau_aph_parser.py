@@ -4,7 +4,7 @@ from pathlib import Path
 from pypdf import PdfReader
 from models import CropRecord, ParsedDocument, ParsedField, SourceFact
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 def _num(v):
     if v is None:
@@ -25,6 +25,24 @@ def _metric(block, label):
 def _first(pattern, text):
     m = re.search(pattern, text, re.I | re.M)
     return m.group(1).strip() if m else None
+
+def _location(block):
+    m = re.search(r"TWP-RGE Section FSA Farm # FSA Tract # Fld#\n([^\n]+)", block)
+    if not m:
+        return {"township_range": None, "section": None, "fsa_farm_number": None, "fsa_tract_number": None, "fsa_field_number": None}
+    tokens = re.sub(r"\s+", " ", m.group(1).strip()).split(" ")
+    out = {"township_range": None, "section": None, "fsa_farm_number": None, "fsa_tract_number": None, "fsa_field_number": None}
+    if tokens:
+        out["township_range"] = tokens[0]
+    if len(tokens) > 1:
+        out["section"] = tokens[1]
+    if len(tokens) > 2:
+        out["fsa_farm_number"] = tokens[2]
+    if len(tokens) > 3:
+        out["fsa_tract_number"] = tokens[3]
+    if len(tokens) > 4:
+        out["fsa_field_number"] = tokens[4]
+    return out
 
 def _year_row(line):
     line = re.sub(r"\s+", " ", line.strip())
@@ -74,6 +92,7 @@ def _parse_unit(block, page_number):
     table = block[start:end] if start >= 0 and end > start else block
     years = [r for r in (_year_row(x) for x in table.splitlines()) if r]
     acre_values = [r["acres"] for r in years if r["acres"] is not None]
+    loc = _location(block)
     return {
         "page": page_number, "crop": h.group(1), "plan": h.group(2), "unit": h.group(3), "structure": h.group(4),
         "county_code": cm.group(1) if cm else None, "county": cm.group(2).strip() if cm else county_raw,
@@ -83,6 +102,7 @@ def _parse_unit(block, page_number):
         "prior_yield": _metric(block, "Prior Yield"), "yield_floor": _metric(block, "Yld Floor"),
         "rate_yield": _metric(block, "Rate Yld"), "average_yield": _metric(block, "Ave. Yield"),
         "approved_yield": approved, "acres": acre_values[-1] if acre_values else None, "years": years,
+        **loc,
     }
 
 def looks_like_nau_aph(text):
@@ -107,10 +127,10 @@ def parse_nau_aph_pdf(path: Path):
         if key in seen:
             continue
         seen.add(key)
-        meta = {k: u.get(k) for k in ("unit","plan","structure","county_code","type","options","yield_limit","share","t_yield","prior_yield","yield_floor","rate_yield","average_yield","approved_yield","page")}
+        meta = {k: u.get(k) for k in ("unit","plan","structure","county_code","type","options","yield_limit","share","t_yield","prior_yield","yield_floor","rate_yield","average_yield","approved_yield","page","township_range","section","fsa_farm_number","fsa_tract_number","fsa_field_number")}
         meta.update({"carrier": "NAU Country", "parser_version": VERSION})
         out.fields.append(ParsedField(name=u["farm_name"] or "NAU Unit " + u["unit"], acres=u["acres"], county=u["county"], state="KS", field_number=u["unit"], crop=u["crop"], practice=u["practice"], irrigation="IRRIGATED" if "IRR" in (u["practice"] or "") and "NIRR" not in (u["practice"] or "") else "NON-IRRIGATED", metadata=meta))
-        for field_name, value in (("unit_number",u["unit"]),("approved_yield",u["approved_yield"]),("rate_yield",u["rate_yield"]),("t_yield",u["t_yield"]),("insured_share",u["share"])):
+        for field_name, value in (("unit_number",u["unit"]),("approved_yield",u["approved_yield"]),("rate_yield",u["rate_yield"]),("t_yield",u["t_yield"]),("insured_share",u["share"]),("township_range",u["township_range"]),("section",u["section"]),("fsa_farm_number",u["fsa_farm_number"])):
             if value is not None:
                 out.facts.append(SourceFact("aph_unit", u["unit"], field_name, value, source_locator=f"page:{u['page']}", confidence=.99))
         for y in u["years"]:
@@ -119,5 +139,5 @@ def parse_nau_aph_pdf(path: Path):
             for field_name, value in (("production",y["production"]),("acres",y["acres"]),("actual_yield",y["actual_yield"]),("pre_qa_actual_yield",y["preqa"])):
                 if value is not None:
                     out.facts.append(SourceFact("aph_year", f"{u['unit']}:{y['year']}", field_name, value, source_locator=f"page:{u['page']}", confidence=.98))
-    out.warnings.append(f"NAU APH parser v{VERSION}: extracted {len(out.fields)} crop/practice units and {len(out.crop_records)} APH year rows. Validate additional NAU form versions before production use.")
+    out.warnings.append(f"NAU APH parser v{VERSION}: extracted {len(out.fields)} crop/practice units and {len(out.crop_records)} APH year rows. Township/range/section is captured for provisional soil cross-reference; exact field boundaries should replace PLSS sections for final seed placement.")
     return out

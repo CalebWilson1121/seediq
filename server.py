@@ -18,7 +18,7 @@ from seed_engine import rank_seeds
 
 BASE = Path(__file__).parent
 
-app = FastAPI(title="SeedIQ Farm Data Engine", version="0.2.0")
+app = FastAPI(title="SeedIQ Farm Data Engine", version="0.2.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -43,14 +43,26 @@ def startup() -> None:
     init_db()
 
 
+def _database_status() -> str:
+    try:
+        with connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return "connected"
+    except Exception as exc:
+        print(f"SeedIQ database connection error: {type(exc).__name__}: {exc}", flush=True)
+        return "error"
+
+
 @app.get("/api/health")
 def health():
     storage_ready = bool(os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")))
+    db_status = _database_status()
     return {
-        "status": "ok",
+        "status": "ok" if db_status == "connected" else "degraded",
         "architecture": "read-once-normalize-reuse",
-        "version": "0.2.0",
+        "version": "0.2.1",
         "database": backend_name(),
+        "database_status": db_status,
         "storage": "supabase" if storage_ready else "local",
         "ai": "openai" if os.getenv("OPENAI_API_KEY") else "mock",
     }
@@ -68,16 +80,21 @@ async def upload_document(
     try:
         return ingest_file(temp_path, file.filename or "upload.bin", document_type)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        print(f"SeedIQ upload error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=400, detail="The document could not be imported. Check the Data Hub status and parser support for this file.") from exc
     finally:
         temp_path.unlink(missing_ok=True)
 
 
 @app.get("/api/farms")
 def list_farms():
-    with connect() as conn:
-        rows = conn.execute("SELECT * FROM farms ORDER BY updated_at DESC").fetchall()
-    return rows_to_dicts(rows)
+    try:
+        with connect() as conn:
+            rows = conn.execute("SELECT * FROM farms ORDER BY updated_at DESC").fetchall()
+        return rows_to_dicts(rows)
+    except Exception as exc:
+        print(f"SeedIQ farms query error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail="Farm database is temporarily unavailable.") from exc
 
 
 @app.get("/api/farms/{farm_id}/context")
@@ -86,6 +103,9 @@ def farm_context(farm_id: int):
         return build_farm_context(farm_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"SeedIQ context query error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail="Farm context is temporarily unavailable.") from exc
 
 
 @app.post("/api/farms/{farm_id}/ai")
@@ -94,6 +114,9 @@ def ai_task(farm_id: int, req: AITaskRequest):
         return run_ai_task(farm_id, req.task_type, req.instruction, req.field_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"SeedIQ AI task error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail="AI task could not be completed.") from exc
 
 
 @app.post("/api/seed/rank")

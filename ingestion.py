@@ -72,24 +72,50 @@ def _insert_id(conn, sql: str, params: tuple) -> int:
 
 
 def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> int | None:
-    if parsed.document_type != "APH":
+    """APH or MBAR can be the first document that creates a prospect.
+
+    First document wins for identity/source. Later documents enrich the same farm/prospect.
+    MBAR is treated as the permanent field/geography layer; APH is the production-history layer.
+    """
+    doc_type = (parsed.document_type or "").upper()
+    if doc_type not in {"APH", "MBAR"}:
         row = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (farm_id,)).fetchone()
         return int(row["id"]) if row else None
+
     prospect_name = (parsed.producer_name or parsed.farm_name or "Imported Prospect").strip()
     total_acres = round(sum(float(f.acres or 0) for f in parsed.fields), 2)
-    crops = sorted({str(f.crop).strip() for f in parsed.fields if f.crop})
+    crops = sorted({str(f.crop).strip() for f in parsed.fields if f.crop}) if doc_type == "APH" else []
     metadata = {
-        "created_from": "aph_upload",
-        "carrier": "NAU Country" if any((f.metadata or {}).get("carrier") == "NAU Country" for f in parsed.fields) else None,
-        "unit_count": len(parsed.fields),
-        "aph_year_rows": len(parsed.crop_records),
-        "policy_number": parsed.policy_number,
-        "location_ready_units": sum(1 for f in parsed.fields if (f.metadata or {}).get("township_range") and (f.metadata or {}).get("section")),
+        "last_document_type": doc_type,
+        "has_aph": doc_type == "APH",
+        "has_mbar": doc_type == "MBAR",
     }
+    if doc_type == "APH":
+        metadata.update({
+            "carrier": "NAU Country" if any((f.metadata or {}).get("carrier") == "NAU Country" for f in parsed.fields) else None,
+            "unit_count": len(parsed.fields),
+            "aph_year_rows": len(parsed.crop_records),
+            "policy_number": parsed.policy_number,
+            "location_ready_units": sum(1 for f in parsed.fields if (f.metadata or {}).get("township_range") and (f.metadata or {}).get("section")),
+        })
+    else:
+        metadata.update({
+            "mbar_field_count": len(parsed.fields),
+            "mbar_geometry_count": sum(1 for f in parsed.fields if (f.metadata or {}).get("boundary_geojson")),
+        })
+
+    source = "aph_upload" if doc_type == "APH" else "mbar_upload"
     conn.execute(
-        "INSERT INTO prospects(farm_id,source_document_id,prospect_name,status,source,total_acres,crops_json,metadata_json) VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb) "
-        "ON CONFLICT(farm_id) DO UPDATE SET source_document_id=excluded.source_document_id,prospect_name=excluded.prospect_name,total_acres=excluded.total_acres,crops_json=excluded.crops_json,metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
-        (farm_id, document_id, prospect_name, "new", "aph_upload", total_acres, json_dumps(crops), json_dumps(metadata)),
+        "INSERT INTO prospects(farm_id,source_document_id,prospect_name,status,source,total_acres,crops_json,metadata_json) "
+        "VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb) "
+        "ON CONFLICT(farm_id) DO UPDATE SET "
+        "source_document_id=excluded.source_document_id, "
+        "prospect_name=CASE WHEN prospects.prospect_name='Imported Prospect' THEN excluded.prospect_name ELSE prospects.prospect_name END, "
+        "total_acres=CASE WHEN excluded.total_acres>0 THEN excluded.total_acres ELSE prospects.total_acres END, "
+        "crops_json=CASE WHEN jsonb_array_length(excluded.crops_json)>0 THEN excluded.crops_json ELSE prospects.crops_json END, "
+        "metadata_json=prospects.metadata_json || excluded.metadata_json, "
+        "updated_at=CURRENT_TIMESTAMP",
+        (farm_id, document_id, prospect_name, "new", source, total_acres, json_dumps(crops), json_dumps(metadata)),
     )
     row = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (farm_id,)).fetchone()
     return int(row["id"]) if row else None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -12,13 +13,13 @@ from pydantic import BaseModel
 
 from ai_service import run_ai_task
 from context_builder import build_farm_context
-from database import backend_name, connect, init_db, rows_to_dicts
+from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
 from ingestion import ingest_file
 from seed_engine import rank_seeds
 
 BASE = Path(__file__).parent
 
-app = FastAPI(title="SeedIQ Farm Data Engine", version="0.2.1")
+app = FastAPI(title="SeedIQ Farm Data Engine", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -59,8 +60,8 @@ def health():
     db_status = _database_status()
     return {
         "status": "ok" if db_status == "connected" else "degraded",
-        "architecture": "read-once-normalize-reuse",
-        "version": "0.2.1",
+        "architecture": "aph-to-prospect-to-seed-analysis",
+        "version": "0.3.0",
         "database": backend_name(),
         "database_status": db_status,
         "storage": "supabase" if storage_ready else "local",
@@ -106,6 +107,55 @@ def farm_context(farm_id: int):
     except Exception as exc:
         print(f"SeedIQ context query error: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(status_code=503, detail="Farm context is temporarily unavailable.") from exc
+
+
+@app.get("/api/prospects")
+def list_prospects():
+    try:
+        with connect() as conn:
+            rows = conn.execute(
+                "SELECT p.*, f.producer_name, f.farm_name, "
+                "(SELECT COUNT(*) FROM fields x WHERE x.farm_id=p.farm_id) AS unit_count "
+                "FROM prospects p JOIN farms f ON f.id=p.farm_id ORDER BY p.updated_at DESC"
+            ).fetchall()
+        result = rows_to_dicts(rows)
+        for row in result:
+            for key in ("crops_json", "metadata_json"):
+                if isinstance(row.get(key), str):
+                    try:
+                        row[key] = json.loads(row[key])
+                    except Exception:
+                        pass
+        return result
+    except Exception as exc:
+        print(f"SeedIQ prospects query error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail="Prospect database is temporarily unavailable.") from exc
+
+
+@app.get("/api/prospects/{prospect_id}")
+def get_prospect(prospect_id: int):
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT p.*, f.producer_name, f.farm_name FROM prospects p "
+                "JOIN farms f ON f.id=p.farm_id WHERE p.id=?", (prospect_id,)
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+        prospect = row_to_dict(row) or {}
+        for key in ("crops_json", "metadata_json"):
+            if isinstance(prospect.get(key), str):
+                try:
+                    prospect[key] = json.loads(prospect[key])
+                except Exception:
+                    pass
+        prospect["farm_context"] = build_farm_context(int(prospect["farm_id"]))
+        return prospect
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"SeedIQ prospect query error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail="Prospect context is temporarily unavailable.") from exc
 
 
 @app.post("/api/farms/{farm_id}/ai")

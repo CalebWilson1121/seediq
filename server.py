@@ -93,12 +93,12 @@ def seed_rank(req: SeedRankRequest):
     return {"ranked": rank_seeds(req.field_profile, req.seeds), "engine_version": "seed-fit-v0.1"}
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return FileResponse(BASE / "index.html")
 
 
-@app.get("/{page_name}.html")
+@app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):
     allowed = {
         "index", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects",

@@ -17,6 +17,11 @@ Then open:
 
 Do **not** just double-click `data-hub.html` if you want document upload/API functionality. The other prototype pages still work as static HTML.
 
+
+## If you see `405 Not Allowed`
+
+That means the frontend is being served by a static host that is **not running the Python API**. It is not an APH parsing failure. Use the included `render.yaml`, `Dockerfile`, or run `uvicorn server:app` so the same site serves both the HTML pages and `/api/*`. See `DEPLOY.md`.
+
 ## Test it
 
 Upload one of the included sample files:

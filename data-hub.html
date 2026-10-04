@@ -70,6 +70,7 @@
 <div class="flow" style="margin-bottom:18px"><div class="step2"><b>1. Upload</b>APH / MBAR / SOI</div><div class="step2"><b>2. Parse</b>Known labels & columns</div><div class="step2"><b>3. Normalize</b>Farm / field / crop schema</div><div class="step2"><b>4. Store</b>Values + source lineage</div><div class="step2"><b>5. Reuse</b>Engines + targeted AI</div></div>
 <div class="grid cols">
 <div class="card"><h2>Upload source document</h2><p class="muted">Starter accepts CSV, XLSX, JSON, TXT and text-based PDF. The included sample CSVs are mapped to the normalized schema.</p>
+<div id="backendStatus" class="callout" style="margin:12px 0"><b>Checking Farm Data Engine…</b><br><span class="muted">Uploads require the Python API to be running on the same site.</span></div>
 <form id="uploadForm"><label class="label">Document type</label><select id="docType" class="select" style="margin-bottom:12px"><option value="">Auto-detect</option><option>APH</option><option>MBAR</option><option>SOI</option></select>
 <div class="dropzone" id="dropzone"><b>Drop a file here</b><p class="muted" style="margin:7px 0">or select from your computer</p><input id="fileInput" type="file" accept=".csv,.xlsx,.xlsm,.json,.txt,.pdf"></div>
 <div style="display:flex;gap:10px;margin-top:14px"><button class="btn primary" type="submit">Read & Normalize</button><button type="button" class="btn secondary" onclick="loadFarms()">Refresh Farms</button></div></form>
@@ -82,9 +83,54 @@
 <script>
 let selectedFarm=null;
 const $=id=>document.getElementById(id);
-async function api(path,options={}){const r=await fetch(path,options);if(!r.ok){let t=await r.text();throw new Error(t)}return r.json()}
-async function health(){try{await api('/api/health');$('engineLabel').textContent='Farm Data Engine Online';loadFarms()}catch(e){$('engineLabel').textContent='Static Demo — run server.py for uploads'}}
-$('uploadForm').addEventListener('submit',async e=>{e.preventDefault();const f=$('fileInput').files[0];if(!f)return alert('Choose a file first.');const fd=new FormData();fd.append('file',f);if($('docType').value)fd.append('document_type',$('docType').value);$('uploadStatus').style.display='block';$('uploadStatus').textContent='Reading and normalizing…';try{const res=await api('/api/documents/upload',{method:'POST',body:fd});$('uploadStatus').innerHTML='<b>Imported.</b> '+res.document_type+' • '+(res.fields_created_or_updated||0)+' fields • '+(res.crop_records_created||0)+' crop records • '+(res.facts_stored||0)+' source facts.';loadFarms()}catch(err){$('uploadStatus').innerHTML='<b>Upload failed.</b> '+err.message}});
+let backendOnline=false;
+async function api(path,options={}){
+  const r=await fetch(path,options);
+  const contentType=r.headers.get('content-type')||'';
+  if(!r.ok){
+    let detail='HTTP '+r.status;
+    try{ detail=contentType.includes('application/json') ? (await r.json()).detail || detail : (await r.text()).slice(0,500) || detail; }catch(e){}
+    throw new Error(detail);
+  }
+  if(!contentType.includes('application/json')) throw new Error('This host is serving only the static SeedIQ pages; the Farm Data Engine API is not running.');
+  return r.json();
+}
+async function health(){
+  const box=$('backendStatus');
+  try{
+    const h=await api('/api/health');
+    backendOnline=true;
+    $('engineLabel').textContent='Farm Data Engine Online';
+    box.innerHTML='<b style="color:#17663b">● Farm Data Engine connected</b><br><span class="muted">Read-once upload and normalization are available on this deployment.</span>';
+    $('uploadBtn').disabled=false;
+    loadFarms();
+  }catch(e){
+    backendOnline=false;
+    $('engineLabel').textContent='Static Frontend Only';
+    box.innerHTML='<b style="color:#9a5a12">● Backend not connected</b><br><span class="muted">The page is working, but this host is not running <code>server.py</code>. PDF/APH uploads cannot work on a static-only deployment. Deploy this repo as the included FastAPI web service, then uploads will use the same URL.</span>';
+    $('uploadBtn').disabled=false;
+  }
+}
+$('uploadForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const f=$('fileInput').files[0];
+  if(!f)return alert('Choose a file first.');
+  $('uploadStatus').style.display='block';
+  if(!backendOnline){
+    $('uploadStatus').innerHTML='<b>Backend required.</b> This page is currently on a static host, so it cannot accept document POST uploads. Deploy the repo using <code>render.yaml</code>, <code>Dockerfile</code>, or run <code>uvicorn server:app</code>. The 405 error was from the static host—not the APH file.';
+    return;
+  }
+  const fd=new FormData();
+  fd.append('file',f);
+  if($('docType').value)fd.append('document_type',$('docType').value);
+  $('uploadStatus').textContent='Reading and normalizing…';
+  try{
+    const res=await api('/api/documents/upload',{method:'POST',body:fd});
+    const warn=(res.warnings||[]).length?' <br><span class="muted">'+res.warnings.join(' ')+'</span>':'';
+    $('uploadStatus').innerHTML='<b>Imported.</b> '+res.document_type+' • '+(res.fields_created_or_updated||0)+' fields • '+(res.crop_records_created||0)+' crop records • '+(res.facts_stored||0)+' source facts.'+warn;
+    loadFarms();
+  }catch(err){$('uploadStatus').innerHTML='<b>Upload failed.</b> '+err.message}
+});
 async function loadFarms(){try{const farms=await api('/api/farms');$('farmsTable').innerHTML=farms.length?'<table class="table"><thead><tr><th>Farm</th><th>Producer</th><th>Action</th></tr></thead><tbody>'+farms.map(f=>`<tr><td><b>${f.farm_name||'Imported Farm'}</b></td><td>${f.producer_name||'—'}</td><td><button class="btn secondary" onclick="openFarm(${f.id})">Inspect context</button></td></tr>`).join('')+'</tbody></table>':'<p class="muted">No farms imported yet. Try sample_aph.csv.</p>'}catch(e){}}
 async function openFarm(id){selectedFarm=id;const c=await api('/api/farms/'+id+'/context');$('contextBox').textContent=JSON.stringify(c,null,2);$('aiBtn').disabled=false;$('aiOut').textContent='Structured context loaded. AI can now work without rereading the original document.'}
 $('aiBtn').addEventListener('click',async()=>{if(!selectedFarm)return;try{const r=await api('/api/farms/'+selectedFarm+'/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:'farm_summary',instruction:'Summarize this operation for an agronomist.'})});$('aiOut').innerHTML='<b>AI layer result:</b><br>'+r.output}catch(e){$('aiOut').textContent=e.message}});

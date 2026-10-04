@@ -5,6 +5,7 @@ import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 DB_PATH = Path(__file__).with_name("seediq.db")
 
@@ -147,11 +148,24 @@ def backend_name() -> str:
     return "supabase-postgres" if os.getenv("POSTGRES_URL") else "sqlite-local"
 
 
+def _clean_postgres_url(raw_url: str) -> str:
+    """Remove Vercel/Supabase integration metadata query params psycopg/libpq does not understand."""
+    parts = urlsplit(raw_url)
+    allowed = {
+        "sslmode", "connect_timeout", "application_name", "options",
+        "keepalives", "keepalives_idle", "keepalives_interval", "keepalives_count",
+        "target_session_attrs",
+    }
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k in allowed]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def _postgres_connection():
     import psycopg
     from psycopg.rows import dict_row
 
-    return psycopg.connect(os.environ["POSTGRES_URL"], row_factory=dict_row)
+    url = _clean_postgres_url(os.environ["POSTGRES_URL"])
+    return psycopg.connect(url, row_factory=dict_row, connect_timeout=10)
 
 
 class ConnectionAdapter:
@@ -192,8 +206,6 @@ def connect() -> ConnectionAdapter:
 
 
 def init_db() -> None:
-    # Production schema is managed through Supabase migrations. Local development
-    # keeps the zero-config SQLite fallback so the repo can still run offline.
     if os.getenv("POSTGRES_URL"):
         return
     with connect() as conn:

@@ -16,10 +16,11 @@ from context_builder import build_farm_context
 from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
 from ingestion import ingest_file
 from seed_engine import rank_seeds
+from soil_service import enrich_field, enrich_prospect, prospect_soil_status, set_exact_boundary
 
 BASE = Path(__file__).parent
 
-app = FastAPI(title="SeedIQ Farm Data Engine", version="0.3.0")
+app = FastAPI(title="SeedIQ Farm Data Engine", version="0.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,6 +38,11 @@ class AITaskRequest(BaseModel):
 class SeedRankRequest(BaseModel):
     field_profile: dict[str, float]
     seeds: list[dict]
+
+
+class BoundaryRequest(BaseModel):
+    boundary_geojson: dict
+    enrich_soils: bool = True
 
 
 @app.on_event("startup")
@@ -60,12 +66,14 @@ def health():
     db_status = _database_status()
     return {
         "status": "ok" if db_status == "connected" else "degraded",
-        "architecture": "aph-to-prospect-to-seed-analysis",
-        "version": "0.3.0",
+        "architecture": "aph-to-prospect-to-location-to-soils-to-seed-analysis",
+        "version": "0.4.0",
         "database": backend_name(),
         "database_status": db_status,
         "storage": "supabase" if storage_ready else "local",
         "ai": "openai" if os.getenv("OPENAI_API_KEY") else "mock",
+        "soil_source": "USDA NRCS SSURGO / Soil Data Access",
+        "location_source": "Kansas PLSS section resolver + exact-boundary override",
     }
 
 
@@ -73,16 +81,17 @@ def health():
 async def upload_document(
     file: Annotated[UploadFile, File(...)],
     document_type: Annotated[str | None, Form()] = None,
+    reprocess: Annotated[bool, Form()] = False,
 ):
     suffix = Path(file.filename or "upload.bin").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp" if os.path.isdir("/tmp") else None) as tmp:
         tmp.write(await file.read())
         temp_path = Path(tmp.name)
     try:
-        return ingest_file(temp_path, file.filename or "upload.bin", document_type)
+        return ingest_file(temp_path, file.filename or "upload.bin", document_type, reprocess=reprocess)
     except Exception as exc:
         print(f"SeedIQ upload error: {type(exc).__name__}: {exc}", flush=True)
-        raise HTTPException(status_code=400, detail="The document could not be imported. Check the Data Hub status and parser support for this file.") from exc
+        raise HTTPException(status_code=400, detail=f"The document could not be imported: {str(exc)[:220]}") from exc
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -115,7 +124,8 @@ def list_prospects():
         with connect() as conn:
             rows = conn.execute(
                 "SELECT p.*, f.producer_name, f.farm_name, "
-                "(SELECT COUNT(*) FROM fields x WHERE x.farm_id=p.farm_id) AS unit_count "
+                "(SELECT COUNT(*) FROM fields x WHERE x.farm_id=p.farm_id) AS unit_count, "
+                "(SELECT COUNT(*) FROM field_soils fs JOIN fields x ON x.id=fs.field_id WHERE x.farm_id=p.farm_id) AS soil_ready_count "
                 "FROM prospects p JOIN farms f ON f.id=p.farm_id ORDER BY p.updated_at DESC"
             ).fetchall()
         result = rows_to_dicts(rows)
@@ -150,12 +160,59 @@ def get_prospect(prospect_id: int):
                 except Exception:
                     pass
         prospect["farm_context"] = build_farm_context(int(prospect["farm_id"]))
+        prospect["soil_status"] = prospect_soil_status(prospect_id)
         return prospect
     except HTTPException:
         raise
     except Exception as exc:
         print(f"SeedIQ prospect query error: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(status_code=503, detail="Prospect context is temporarily unavailable.") from exc
+
+
+@app.get("/api/prospects/{prospect_id}/soils")
+def get_prospect_soils(prospect_id: int):
+    try:
+        return prospect_soil_status(prospect_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"SeedIQ soil status error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail=f"Soil status unavailable: {str(exc)[:180]}") from exc
+
+
+@app.post("/api/prospects/{prospect_id}/soils/enrich")
+def enrich_prospect_soils(prospect_id: int, force: bool = False):
+    try:
+        return enrich_prospect(prospect_id, force=force)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"SeedIQ prospect soil enrichment error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=400, detail=f"Soil enrichment failed: {str(exc)[:220]}") from exc
+
+
+@app.post("/api/fields/{field_id}/soils/enrich")
+def enrich_one_field(field_id: int, force: bool = False):
+    try:
+        return enrich_field(field_id, force=force)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"SeedIQ field soil enrichment error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=400, detail=f"Field soil enrichment failed: {str(exc)[:220]}") from exc
+
+
+@app.put("/api/fields/{field_id}/boundary")
+def update_field_boundary(field_id: int, req: BoundaryRequest):
+    try:
+        location = set_exact_boundary(field_id, req.boundary_geojson)
+        result = {"field_id": field_id, "location": location}
+        if req.enrich_soils:
+            result["soil"] = enrich_field(field_id, force=True)
+        return result
+    except Exception as exc:
+        print(f"SeedIQ boundary update error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=400, detail=f"Boundary could not be saved: {str(exc)[:220]}") from exc
 
 
 @app.post("/api/farms/{farm_id}/ai")

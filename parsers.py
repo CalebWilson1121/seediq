@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import io
 import json
 import re
 from pathlib import Path
@@ -12,7 +11,7 @@ from pypdf import PdfReader
 
 from models import CropRecord, ParsedDocument, ParsedField, SourceFact
 
-PARSER_VERSION = "0.1.0"
+PARSER_VERSION = "0.2.0"
 
 ALIASES = {
     "producer": {"producer", "producer name", "insured", "insured name", "grower"},
@@ -97,9 +96,7 @@ def read_text(path: Path) -> str:
     if ext == ".pdf":
         reader = PdfReader(str(path))
         return "\n".join((p.extract_text() or "") for p in reader.pages)
-    if ext in {".txt", ".log"}:
-        return path.read_text(encoding="utf-8", errors="replace")
-    if ext in {".csv", ".json"}:
+    if ext in {".txt", ".log", ".csv", ".json"}:
         return path.read_text(encoding="utf-8", errors="replace")
     return ""
 
@@ -116,70 +113,32 @@ def _mapped_row(row: dict[str, Any]) -> dict[str, Any]:
 def parse_structured_rows(rows: list[dict[str, Any]], doc_type: str) -> ParsedDocument:
     out = ParsedDocument(document_type=doc_type)
     seen_fields: dict[str, ParsedField] = {}
-
     for idx, raw in enumerate(rows, start=2):
         row = _mapped_row(raw)
         out.producer_name = out.producer_name or str(row.get("producer") or "").strip() or None
         out.farm_name = out.farm_name or str(row.get("farm_name") or "").strip() or None
         out.policy_number = out.policy_number or str(row.get("policy_number") or "").strip() or None
-
         fnum = str(row.get("farm_number") or "").strip()
         tnum = str(row.get("tract_number") or "").strip()
         fldnum = str(row.get("field_number") or "").strip()
         fname = str(row.get("field_name") or "").strip()
         field_key = "|".join(x for x in [fnum, tnum, fldnum] if x) or fname or f"row-{idx}"
         field_name = fname or (f"F{fnum} T{tnum} Field {fldnum}" if any([fnum, tnum, fldnum]) else f"Field {idx-1}")
-
         if field_key not in seen_fields:
-            seen_fields[field_key] = ParsedField(
-                name=field_name,
-                acres=_num(row.get("acres")),
-                county=str(row.get("county") or "").strip() or None,
-                state=str(row.get("state") or "").strip() or None,
-                farm_number=fnum or None,
-                tract_number=tnum or None,
-                field_number=fldnum or None,
-                crop=str(row.get("crop") or "").strip() or None,
-                practice=str(row.get("practice") or "").strip() or None,
-                irrigation=str(row.get("irrigation") or "").strip() or None,
-            )
-
-        record = CropRecord(
-            field_key=field_key,
-            crop_year=int(_num(row.get("crop_year"))) if _num(row.get("crop_year")) is not None else None,
-            crop=str(row.get("crop") or "").strip() or None,
-            practice=str(row.get("practice") or "").strip() or None,
-            planted_acres=_num(row.get("acres")),
-            production=_num(row.get("production")),
-            yield_value=_num(row.get("yield_value")),
-            approved_yield=_num(row.get("approved_yield")),
-            coverage_level=(_num(row.get("coverage_level")) / 100.0 if (_num(row.get("coverage_level")) or 0) > 1 else _num(row.get("coverage_level"))),
-            unit_structure=str(row.get("unit_structure") or "").strip() or None,
-        )
+            seen_fields[field_key] = ParsedField(name=field_name, acres=_num(row.get("acres")), county=str(row.get("county") or "").strip() or None, state=str(row.get("state") or "").strip() or None, farm_number=fnum or None, tract_number=tnum or None, field_number=fldnum or None, crop=str(row.get("crop") or "").strip() or None, practice=str(row.get("practice") or "").strip() or None, irrigation=str(row.get("irrigation") or "").strip() or None)
+        record = CropRecord(field_key=field_key, crop_year=int(_num(row.get("crop_year"))) if _num(row.get("crop_year")) is not None else None, crop=str(row.get("crop") or "").strip() or None, practice=str(row.get("practice") or "").strip() or None, planted_acres=_num(row.get("acres")), production=_num(row.get("production")), yield_value=_num(row.get("yield_value")), approved_yield=_num(row.get("approved_yield")), coverage_level=(_num(row.get("coverage_level")) / 100.0 if (_num(row.get("coverage_level")) or 0) > 1 else _num(row.get("coverage_level"))), unit_structure=str(row.get("unit_structure") or "").strip() or None)
         if any(v is not None for v in [record.crop_year, record.crop, record.planted_acres, record.production, record.yield_value, record.approved_yield, record.coverage_level, record.unit_structure]):
             out.crop_records.append(record)
-
         for canonical, value in row.items():
             if value not in (None, ""):
-                out.facts.append(SourceFact(
-                    entity_type="field",
-                    entity_key=field_key,
-                    field_name=canonical,
-                    value=value,
-                    source_locator=f"row:{idx}",
-                    confidence=1.0,
-                ))
-
+                out.facts.append(SourceFact(entity_type="field", entity_key=field_key, field_name=canonical, value=value, source_locator=f"row:{idx}", confidence=1.0))
     out.fields = list(seen_fields.values())
     return out
 
 
 def parse_loose_text(text: str, doc_type: str) -> ParsedDocument:
     out = ParsedDocument(document_type=doc_type, raw_preview=text[:6000])
-    patterns = {
-        "producer_name": r"(?:Producer|Insured)\s*[:#]?\s*([^\n]+)",
-        "policy_number": r"Policy(?: Number| #)?\s*[:#]?\s*([A-Za-z0-9-]+)",
-    }
+    patterns = {"producer_name": r"(?:Producer|Insured)\s*[:#]?\s*([^\n]+)", "policy_number": r"Policy(?: Number| #)?\s*[:#]?\s*([A-Za-z0-9-]+)"}
     for attr, pattern in patterns.items():
         m = re.search(pattern, text, flags=re.I)
         if m:
@@ -196,6 +155,11 @@ def parse_document(path: Path, forced_type: str | None = None) -> tuple[ParsedDo
         parsed = parse_structured_rows(read_tabular(path), doc_type)
         parsed.raw_preview = preview[:6000] if preview else None
         return parsed, "structured-tabular"
-    if ext in {".pdf", ".txt", ".log"}:
+    if ext == ".pdf":
+        from nau_aph_parser import looks_like_nau_aph, parse_nau_aph_pdf
+        if looks_like_nau_aph(preview):
+            return parse_nau_aph_pdf(path), "nau-aph-v0.1"
+        return parse_loose_text(preview, doc_type), "generic-text"
+    if ext in {".txt", ".log"}:
         return parse_loose_text(preview, doc_type), "generic-text"
     raise ValueError(f"Unsupported file type: {ext}")

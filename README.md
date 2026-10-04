@@ -1,23 +1,9 @@
-# SeedIQ Multi-Page Prototype
+# SeedIQ Multi-Page Prototype — Flat Self-Contained Repo
 
-A static, multi-page prototype of a seed intelligence and sales platform for seed dealers, agronomists, territory managers, and sales leadership.
+Upload all files in this folder directly to the root of your repository.
 
-## Open locally
-Double-click `index.html`. No install, server, package manager, framework, or internet connection is required.
+There is no `assets` folder, no npm, no framework, and no build process. Each HTML page contains its own CSS and JavaScript.
 
-## Upload to a repo/static host
-Upload the contents of this folder with `index.html` at the repository/site root. All navigation and assets use relative paths and work on static hosting.
+Start with `index.html`.
 
-## Main pages
-- `index.html` — dealer/agronomist dashboard
-- `farmers.html` — farmer and field workspace
-- `field-analysis.html` — soil, weather and hybrid fit
-- `whole-farm-plan.html` — whole-farm portfolio allocation
-- `genetics.html` — genetics library
-- `prospects.html` — seed-company prospect workspace
-- `prospect-detail.html` — example pre-call brief
-- `sales-packet.html` — prospect proposal builder
-- `pipeline.html` — sales pipeline and leadership view
-- `product-spec.html` — scope/build economics
-
-All data is fictional sample data.
+All data is fictional sample data for demo purposes.

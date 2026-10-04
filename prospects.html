@@ -5,7 +5,66 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SeedIQ — Prospect Intelligence</title>
 <meta name="description" content="Seed-company rep prospecting workspace" />
-<link rel="stylesheet" href="assets/styles.css" />
+<style>
+:root{
+    --bg:#f4f7f2; --panel:#ffffff; --ink:#162319; --muted:#6b776d; --line:#dfe7df;
+    --green:#1f6f43; --green2:#2f8f5b; --lime:#dff2e5; --gold:#c9992d; --red:#b94a48;
+    --shadow:0 14px 35px rgba(26,53,36,.10);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+  .app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
+  .sidebar{background:#102a1d;color:white;padding:22px 18px;position:sticky;top:0;height:100vh}
+  .brand{font-weight:800;font-size:25px;letter-spacing:-.5px}.brand span{color:#8fd39f}
+  .subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}
+  nav{margin-top:30px;display:grid;gap:8px}
+  nav a{display:block;width:100%;border:0;background:transparent;color:#dce8df;text-align:left;padding:12px 13px;border-radius:10px;font-size:14px;cursor:pointer;text-decoration:none}
+  nav a.active,nav a:hover{background:#1d4b33;color:white}
+  .side-card{margin-top:28px;background:#173c29;border:1px solid #2a6041;border-radius:14px;padding:14px;font-size:12px;color:#cfe0d4}
+  .main{padding:26px 30px 45px}
+  .topbar{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:22px}
+  h1,h2,h3,p{margin-top:0}h1{font-size:28px;margin-bottom:5px}h2{font-size:20px}h3{font-size:15px}
+  .muted{color:var(--muted)}
+  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:white;border-radius:999px;padding:8px 12px;font-size:12px}
+  .dot{width:8px;height:8px;background:#43a66d;border-radius:50%}
+  .grid{display:grid;gap:16px}.kpis{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 2px 10px rgba(25,45,32,.03)}
+  .kpi strong{display:block;font-size:27px;margin-top:5px}.kpi span{font-size:12px;color:var(--muted)}
+  .cols{grid-template-columns:1.25fr .75fr}.cols2{grid-template-columns:1fr 1fr}.cols3{grid-template-columns:repeat(3,1fr)}
+  .table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--line);font-size:13px}.table th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}.table tr:last-child td{border-bottom:0}
+  .btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}.btn.primary{background:var(--green);color:white}.btn.secondary{background:#eaf2ed;color:#17452d}.btn.outline{background:white;border:1px solid var(--line);color:var(--ink)}
+  .field-list{display:grid;gap:10px}.field{padding:13px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:#fff}.field.active{border:2px solid var(--green);background:#f7fbf8}.field .row{display:flex;justify-content:space-between;gap:8px}
+  .map{height:315px;border-radius:16px;background:linear-gradient(135deg,#dce8d2,#a8c397);position:relative;overflow:hidden;border:1px solid #c8d7c4}
+  .map:before,.map:after{content:"";position:absolute;border:2px solid rgba(255,255,255,.65);background:rgba(74,130,75,.22);transform:rotate(-7deg)}
+  .map:before{width:200px;height:130px;left:70px;top:70px;border-radius:22px}.map:after{width:150px;height:95px;right:55px;bottom:50px;border-radius:30px}
+  .map-label{position:absolute;left:24px;bottom:18px;background:rgba(16,42,29,.88);color:white;padding:10px 12px;border-radius:10px;font-size:12px}
+  .riskbar{margin:10px 0}.riskrow{display:grid;grid-template-columns:135px 1fr 38px;gap:10px;align-items:center;font-size:12px}.bar{height:8px;background:#e8eee9;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#72b88d,#256d45);border-radius:999px}
+  .recommendation{border:1px solid var(--line);border-radius:14px;padding:15px;margin-top:12px}.recommendation.top{border:2px solid var(--green);background:#fbfefc}.rec-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.score{background:var(--lime);color:#164d31;border-radius:12px;padding:8px 10px;text-align:center;min-width:76px}.score b{font-size:21px;display:block}.tag{display:inline-block;font-size:10px;font-weight:700;padding:5px 8px;border-radius:999px;background:#eef4f0;margin:3px 4px 0 0}.good{background:#e4f5e9;color:#1c6c3d}.warn{background:#fff2d9;color:#8d6517}.danger{background:#fde8e7;color:#9c3735}
+  .chat{background:#f7faf8;border:1px solid var(--line);border-radius:14px;padding:15px}.chat .bubble{background:white;border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin-top:10px;font-size:13px;line-height:1.45}.chat .prompt{color:#1e5d3b;font-weight:700}
+  .hidden{display:none!important}.section{display:none}.section.active{display:block}
+  .farm-plan{display:grid;grid-template-columns:1fr 1fr;gap:15px}.donut{width:170px;height:170px;border-radius:50%;background:conic-gradient(#245f3d 0 30%,#4d8c64 30% 53%,#79a987 53% 72%,#b2c8aa 72% 86%,#d8e2d2 86%);margin:auto;position:relative}.donut:after{content:"2,860 acres";position:absolute;inset:34px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;text-align:center;padding:10px}
+  .timeline{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.step{border:1px solid var(--line);padding:12px;border-radius:12px;background:#fff}.step b{display:block;margin-bottom:4px}.step small{color:var(--muted)}
+  .footer-note{font-size:11px;color:#7a867d;margin-top:18px}
+  .logo-row{display:flex;align-items:center;gap:10px}.avatar{width:36px;height:36px;border-radius:50%;background:#d9e9df;display:grid;place-items:center;font-weight:800;color:#1d5737}
+
+  .hero{background:linear-gradient(135deg,#123822,#1f6f43);color:white;border-radius:18px;padding:22px;box-shadow:var(--shadow)}
+  .hero h1,.hero h2,.hero h3{color:white}.hero .muted{color:#c9ddcf}
+  .split-kpi{display:flex;justify-content:space-between;align-items:flex-end;gap:10px}
+  .big-num{font-size:34px;font-weight:800;letter-spacing:-1px}
+  .mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.mini{padding:12px;border:1px solid var(--line);border-radius:12px;background:#fbfdfb}
+  .packet-page{background:white;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 8px 20px rgba(25,45,32,.06);position:relative;overflow:hidden}.packet-page:before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--green)}
+  .packet-cover{min-height:330px;display:flex;flex-direction:column;justify-content:space-between;background:linear-gradient(135deg,#f4faf5,#e2efe5)}
+  .packet-brand{font-weight:800;font-size:30px;color:var(--green)}
+  .metric-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f7faf8;border:1px solid var(--line);padding:12px;border-radius:12px}.metric b{display:block;font-size:20px}
+  .status{font-size:10px;font-weight:800;padding:5px 8px;border-radius:999px;display:inline-block}.status.hot{background:#fde8e7;color:#963c39}.status.warm{background:#fff0d2;color:#855f14}.status.sent{background:#e7f2ff;color:#2f5f91}.status.won{background:#e4f5e9;color:#1c6c3d}
+  .input,.select,.textarea{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:9px;background:white;font:inherit}.textarea{min-height:90px;resize:vertical}.label{display:block;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid .full{grid-column:1/-1}
+  .opp-card{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px;background:white}.opp-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+  .callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0;font-size:13px;line-height:1.5}
+
+  @media(max-width:950px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.kpis,.cols,.cols2,.cols3,.farm-plan{grid-template-columns:1fr}.timeline,.metric-row,.mini-grid,.form-grid{grid-template-columns:1fr 1fr}.main{padding:18px}.sidebar nav{grid-template-columns:repeat(3,1fr)}}
+
+</style>
 </head>
 <body>
 <div class="app">
@@ -63,6 +122,9 @@
     <p class="footer-note">SeedIQ prototype • All data shown is fictional/sample data for product-concept discussion only.</p>
   </main>
 </div>
-<script src="assets/app.js"></script>
+<script>
+document.querySelectorAll('[data-print]').forEach(btn=>btn.addEventListener('click',()=>window.print()));
+
+</script>
 </body>
 </html>

@@ -124,6 +124,12 @@ def seed_rank(req: SeedRankRequest):
     return {"ranked": rank_seeds(req.field_profile, req.seeds), "engine_version": "seed-fit-v0.1"}
 
 
+@app.get("/api/demo/load-sample")
+def demo_load_sample():
+    """Preview-branch-only end-to-end smoke test; never merged to production."""
+    return ingest_file(BASE / "sample_aph.csv", "sample_aph.csv", "APH")
+
+
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return FileResponse(BASE / "index.html")

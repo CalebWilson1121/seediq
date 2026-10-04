@@ -4,7 +4,7 @@ from pathlib import Path
 from pypdf import PdfReader
 from models import CropRecord, ParsedDocument, ParsedField, SourceFact
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 def _num(v):
     if v is None:
@@ -21,6 +21,10 @@ def _after(block, label):
 
 def _metric(block, label):
     return _num(_after(block, label))
+
+def _first(pattern, text):
+    m = re.search(pattern, text, re.I | re.M)
+    return m.group(1).strip() if m else None
 
 def _year_row(line):
     line = re.sub(r"\s+", " ", line.strip())
@@ -88,7 +92,9 @@ def looks_like_nau_aph(text):
 def parse_nau_aph_pdf(path: Path):
     pages = [p.extract_text() or "" for p in PdfReader(str(path)).pages]
     full = "\n".join(pages)
-    out = ParsedDocument(document_type="APH", raw_preview=full[:6000])
+    producer = _first(r"Insured Name:\s*([^\n]+?)(?:\s+Agency Code:|$)", full) or _first(r"Insured Information\s*\n([^\n]+)", full)
+    policy = _first(r"Policy\s*#?:?\s*([A-Z0-9-]+)", full)
+    out = ParsedDocument(document_type="APH", producer_name=producer, farm_name=producer, policy_number=policy, raw_preview=full[:6000])
     units = []
     for page_number, text in enumerate(pages, 1):
         for block in text.split("Crop Plan\n")[1:]:
@@ -103,7 +109,7 @@ def parse_nau_aph_pdf(path: Path):
         seen.add(key)
         meta = {k: u.get(k) for k in ("unit","plan","structure","county_code","type","options","yield_limit","share","t_yield","prior_yield","yield_floor","rate_yield","average_yield","approved_yield","page")}
         meta.update({"carrier": "NAU Country", "parser_version": VERSION})
-        out.fields.append(ParsedField(name=u["farm_name"] or "NAU Unit " + u["unit"], acres=u["acres"], county=u["county"], field_number=u["unit"], crop=u["crop"], practice=u["practice"], irrigation="IRRIGATED" if "IRR" in (u["practice"] or "") and "NIRR" not in (u["practice"] or "") else "NON-IRRIGATED", metadata=meta))
+        out.fields.append(ParsedField(name=u["farm_name"] or "NAU Unit " + u["unit"], acres=u["acres"], county=u["county"], state="KS", field_number=u["unit"], crop=u["crop"], practice=u["practice"], irrigation="IRRIGATED" if "IRR" in (u["practice"] or "") and "NIRR" not in (u["practice"] or "") else "NON-IRRIGATED", metadata=meta))
         for field_name, value in (("unit_number",u["unit"]),("approved_yield",u["approved_yield"]),("rate_yield",u["rate_yield"]),("t_yield",u["t_yield"]),("insured_share",u["share"])):
             if value is not None:
                 out.facts.append(SourceFact("aph_unit", u["unit"], field_name, value, source_locator=f"page:{u['page']}", confidence=.99))

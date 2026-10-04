@@ -90,6 +90,7 @@ def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocumen
         "unit_count": len(parsed.fields),
         "aph_year_rows": len(parsed.crop_records),
         "policy_number": parsed.policy_number,
+        "location_ready_units": sum(1 for f in parsed.fields if (f.metadata or {}).get("township_range") and (f.metadata or {}).get("section")),
     }
     conn.execute(
         "INSERT INTO prospects(farm_id,source_document_id,prospect_name,status,source,total_acres,crops_json,metadata_json) "
@@ -103,12 +104,24 @@ def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocumen
     return int(row["id"]) if row else None
 
 
-def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = None) -> dict[str, Any]:
+def _prepare_reprocess(existing) -> None:
+    document_id = int(existing["id"])
+    farm_id = int(existing["farm_id"])
+    with connect() as conn:
+        # Soil/location results are derived from parser metadata and must be rebuilt if the parser changes.
+        conn.execute("DELETE FROM field_soils WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
+        conn.execute("DELETE FROM field_locations WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
+        conn.execute("DELETE FROM source_facts WHERE document_id=?", (document_id,))
+        conn.execute("DELETE FROM crop_records WHERE source_document_id=?", (document_id,))
+        conn.execute("DELETE FROM documents WHERE id=?", (document_id,))
+
+
+def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = None, reprocess: bool = False) -> dict[str, Any]:
     sha = sha256_file(temp_path)
 
     with connect() as conn:
         existing = conn.execute("SELECT * FROM documents WHERE sha256=?", (sha,)).fetchone()
-        if existing:
+        if existing and not reprocess:
             prospect = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (existing["farm_id"],)).fetchone()
             return {
                 "duplicate": True,
@@ -117,7 +130,10 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 "prospect_id": int(prospect["id"]) if prospect else None,
                 "status": existing["status"],
                 "storage": existing["stored_path"],
+                "message": "Already imported. Use reprocess=true after a parser upgrade to rebuild normalized data.",
             }
+    if existing and reprocess:
+        _prepare_reprocess(existing)
 
     parsed, parser_name = parse_document(temp_path, forced_type)
     farm_key = _farm_key(parsed, sha)
@@ -195,6 +211,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
 
     return {
         "duplicate": False,
+        "reprocessed": bool(existing and reprocess),
         "document_id": document_id,
         "farm_id": farm_id,
         "prospect_id": prospect_id,

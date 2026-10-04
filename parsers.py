@@ -11,7 +11,7 @@ from pypdf import PdfReader
 
 from models import CropRecord, ParsedDocument, ParsedField, SourceFact
 
-PARSER_VERSION = "0.2.0"
+PARSER_VERSION = "0.3.0"
 
 ALIASES = {
     "producer": {"producer", "producer name", "insured", "insured name", "grower"},
@@ -150,7 +150,17 @@ def parse_loose_text(text: str, doc_type: str) -> ParsedDocument:
 def parse_document(path: Path, forced_type: str | None = None) -> tuple[ParsedDocument, str]:
     ext = path.suffix.lower()
     preview = read_text(path)
-    doc_type = forced_type or detect_document_type(path.name, preview)
+    doc_type = (forced_type or detect_document_type(path.name, preview)).upper()
+
+    if doc_type == "MBAR":
+        from mbar_parser import parse_mbar_pdf_text, parse_mbar_rows
+        if ext in {".csv", ".xlsx", ".xlsm", ".json"}:
+            parsed = parse_mbar_rows(read_tabular(path))
+            parsed.raw_preview = preview[:6000] if preview else None
+            return parsed, "mbar-fields-v0.1"
+        if ext == ".pdf":
+            return parse_mbar_pdf_text(preview), "mbar-pdf-starter-v0.1"
+
     if ext in {".csv", ".xlsx", ".xlsm", ".json"}:
         parsed = parse_structured_rows(read_tabular(path), doc_type)
         parsed.raw_preview = preview[:6000] if preview else None
@@ -158,7 +168,7 @@ def parse_document(path: Path, forced_type: str | None = None) -> tuple[ParsedDo
     if ext == ".pdf":
         from nau_aph_parser import looks_like_nau_aph, parse_nau_aph_pdf
         if looks_like_nau_aph(preview):
-            return parse_nau_aph_pdf(path), "nau-aph-v0.1"
+            return parse_nau_aph_pdf(path), "nau-aph-v0.2"
         return parse_loose_text(preview, doc_type), "generic-text"
     if ext in {".txt", ".log"}:
         return parse_loose_text(preview, doc_type), "generic-text"

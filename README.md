@@ -1,8 +1,95 @@
-# SeedIQ Farm Data Engine Starter
+# SeedIQ
 
-This repo combines the SeedIQ multi-page prototype with the first working backend for the **read once → normalize → reuse** architecture.
+SeedIQ is a multi-page seed intelligence and sales prototype backed by a working **read once → normalize once → reuse everywhere** farm-data architecture.
 
-## Fastest way to run
+## Current connected stack
+
+- **GitHub** — source of truth: `CalebWilson1121/seediq`
+- **Vercel** — FastAPI + HTML deployment; GitHub pushes auto-deploy
+- **Supabase Postgres** — normalized farm, field, crop, document, recommendation and AI-event data
+- **Supabase Storage** — private `seediq-documents` bucket for original APH / MBAR / SOI source files
+- **OpenAI** — optional explanation layer; automatically activates when `OPENAI_API_KEY` is present
+
+Production health endpoint:
+
+`/api/health`
+
+Farm Data Hub:
+
+`/data-hub.html`
+
+## Architecture
+
+```text
+APH / MBAR / SOI
+      ↓
+Upload to SeedIQ API
+      ↓
+SHA-256 duplicate check
+      ↓
+Parser / normalizer
+      ├── original source → private Supabase Storage
+      └── normalized facts → Supabase Postgres
+                           ↓
+             farm / field context object
+                 ├── seed placement engine
+                 ├── coverage / APH analysis
+                 ├── CRM / prospect workflows
+                 └── compact context → AI explanation
+```
+
+The original document is not resent to AI every time. The source is read once, normalized and reused. AI is the explanation/narrative layer; deterministic engines and structured data remain the source of truth.
+
+## Production database schema
+
+Supabase migrations create:
+
+- `farms`
+- `fields`
+- `documents`
+- `crop_records`
+- `source_facts`
+- `seed_products`
+- `field_profiles`
+- `recommendations`
+- `ai_events`
+
+All application tables have RLS enabled. There are intentionally no browser-access policies yet; during development, data is accessed through the protected SeedIQ backend rather than directly from client-side JavaScript.
+
+## Document ingestion
+
+The current generic parser supports:
+
+- CSV
+- XLSX / XLSM
+- JSON
+- TXT
+- text-based PDF
+
+The repo contains sample APH / MBAR / SOI files. Production-grade carrier/AIP parsers still need to be built and validated against real de-identified forms.
+
+### Read-once behavior
+
+Each uploaded document is SHA-256 hashed before parsing/storage. If the same file is uploaded again, SeedIQ returns the existing document/farm reference rather than rereading and duplicating it.
+
+## AI layer
+
+`ai_service.py` has two providers:
+
+1. `OpenAIProvider` — used automatically when `OPENAI_API_KEY` exists.
+2. `MockAIProvider` — zero-cost fallback for development.
+
+The OpenAI provider receives `compact_ai_context()` rather than the original source file. Default model is `gpt-5.6-luna`, override with `OPENAI_MODEL`.
+
+Required Vercel secret to activate live AI:
+
+```text
+OPENAI_API_KEY
+```
+
+Do not place an API key in HTML, JavaScript or the GitHub repository.
+
+## Local development
 
 ```bash
 python -m venv .venv
@@ -11,49 +98,32 @@ pip install -r requirements.txt
 uvicorn server:app --reload
 ```
 
-Then open:
+Open:
 
 `http://127.0.0.1:8000/data-hub.html`
 
-Do **not** just double-click `data-hub.html` if you want document upload/API functionality. The other prototype pages still work as static HTML.
+When `POSTGRES_URL` is absent, SeedIQ automatically falls back to a local SQLite database for development.
 
+## API endpoints
 
-## If you see `405 Not Allowed`
+- `GET /api/health`
+- `POST /api/documents/upload`
+- `GET /api/farms`
+- `GET /api/farms/{farm_id}/context`
+- `POST /api/farms/{farm_id}/ai`
+- `POST /api/seed/rank`
 
-That means the frontend is being served by a static host that is **not running the Python API**. It is not an APH parsing failure. Use the included `render.yaml`, `Dockerfile`, or run `uvicorn server:app` so the same site serves both the HTML pages and `/api/*`. See `DEPLOY.md`.
+## Deployment
 
-## Test it
+Vercel is linked directly to the GitHub repository. Pushing to `main` automatically creates a production deployment. Preview branches create Vercel preview deployments.
 
-Upload one of the included sample files:
+Supabase connection/storage variables are configured as Vercel environment variables. Secrets stay in Vercel/Supabase and are not committed to GitHub.
 
-- `sample_aph.csv`
-- `sample_mbar.csv`
-- `sample_soi.csv`
+## Next product-development milestones
 
-The engine will:
-
-1. hash and store the original source,
-2. detect/type the document,
-3. parse recognized columns,
-4. create/update the farm and fields,
-5. store crop records,
-6. store source facts with row-level provenance,
-7. expose a reusable farm context at `/api/farms/{id}/context`.
-
-## Important files
-
-- `server.py` — API and page server.
-- `database.py` — normalized database schema.
-- `parsers.py` — parser registry and current generic mappings.
-- `ingestion.py` — read-once ingestion pipeline.
-- `context_builder.py` — full farm context + compact AI context.
-- `ai_service.py` — replaceable AI provider boundary; mock provider costs $0.
-- `seed_engine.py` — deterministic seed scoring example.
-- `ARCHITECTURE.md` — architecture and next milestones.
-- `data-hub.html` — interactive data-ingestion page.
-
-## Current limitations
-
-The parser is intentionally a starter. Real APH/MBAR/SOI formats vary by AIP, form version and export method. The production version should use actual de-identified examples and form-specific parser tests. Text-based PDFs can be read; scanned PDFs need a separate OCR/document-vision pipeline.
-
-The included AI provider is a mock. That is deliberate: it proves the desired boundary before adding a paid API. When a real provider is added, it should receive `compact_ai_context()` instead of the original document whenever possible.
+1. Carrier/AIP-specific APH, MBAR and SOI parsers with fixture tests.
+2. NOAA weather enrichment by field/location.
+3. NRCS soil enrichment by field polygon.
+4. Seed-company genetics import and normalization.
+5. Deterministic field-fit scoring and whole-farm portfolio optimization.
+6. SeedIQ user authentication and organization/role controls before external production use.

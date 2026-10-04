@@ -6,12 +6,13 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ai_service import run_ai_task
+from auth_service import admin_overview, current_user, dealer_demo_dashboard, dealer_detail, login, logout, require_role, set_dealer_access, set_user_access
 from catalog_service import import_catalog, list_catalogs, list_organizations, list_products, publish_catalog
 from context_builder import build_farm_context
 from crop_plan_service import list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
@@ -21,8 +22,16 @@ from seed_engine import rank_seeds
 from soil_service import enrich_field, enrich_prospect, prospect_soil_status, set_exact_boundary
 
 BASE = Path(__file__).parent
-app = FastAPI(title="SeedIQ Seed Sales Platform", version="0.6.0")
+SESSION_COOKIE = "seediq_session"
+app = FastAPI(title="SeedIQ Seed Sales Platform", version="0.7.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class AccessRequest(BaseModel):
+    enabled: bool
 
 class AITaskRequest(BaseModel):
     task_type: str = "farm_summary"
@@ -65,22 +74,94 @@ def _database_status() -> str:
         print(f"SeedIQ database connection error: {type(exc).__name__}: {exc}", flush=True)
         return "error"
 
+def _user(request: Request):
+    return current_user(request.cookies.get(SESSION_COOKIE))
+
+def _require(request: Request, *roles: str):
+    try:
+        return require_role(_user(request), *roles)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401 if str(exc) == "Login required" else 403, detail=str(exc)) from exc
+
 @app.get("/api/health")
 def health():
     storage_ready = bool(os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")))
     db_status = _database_status()
     return {
         "status": "ok" if db_status == "connected" else "degraded",
-        "architecture": "dealer-orgs-catalogs-aph-mbar-fields-crops-soils-seed-sales",
-        "version": "0.6.0",
+        "architecture": "super-admin-dealer-orgs-catalogs-aph-mbar-fields-crops-soils-seed-sales",
+        "version": "0.7.0",
         "database": backend_name(),
         "database_status": db_status,
         "storage": "supabase" if storage_ready else "local",
         "ai": "openai" if os.getenv("OPENAI_API_KEY") else "mock",
+        "access_control": "session-auth + dealer on/off + user on/off",
         "seed_catalogs": "annual dealer catalogs",
         "soil_source": "USDA NRCS SSURGO / Soil Data Access",
         "field_source": "MBAR + exact-boundary override",
     }
+
+@app.post("/api/auth/login")
+def auth_login(req: LoginRequest, response: Response):
+    try:
+        result = login(req.email, req.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    response.set_cookie(SESSION_COOKIE, result.pop("token"), max_age=7*24*3600, httponly=True, secure=True, samesite="lax", path="/")
+    return result
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response):
+    logout(request.cookies.get(SESSION_COOKIE))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    return user
+
+@app.get("/api/admin/overview")
+def get_admin_overview(request: Request):
+    _require(request, "super_admin")
+    return admin_overview()
+
+@app.get("/api/admin/dealers/{organization_id}")
+def get_admin_dealer(organization_id: int, request: Request):
+    _require(request, "super_admin")
+    try:
+        return dealer_detail(organization_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.put("/api/admin/dealers/{organization_id}/access")
+def admin_dealer_access(organization_id: int, req: AccessRequest, request: Request):
+    user = _require(request, "super_admin")
+    try:
+        return set_dealer_access(organization_id, req.enabled, int(user["id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.put("/api/admin/users/{user_id}/access")
+def admin_user_access(user_id: int, req: AccessRequest, request: Request):
+    user = _require(request, "super_admin")
+    try:
+        return set_user_access(user_id, req.enabled, int(user["id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.get("/api/dealer/dashboard")
+def dealer_dashboard(request: Request):
+    user = _require(request, "dealer_admin", "dealer_user")
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+    return dealer_demo_dashboard(int(user["organization_id"]))
 
 @app.post("/api/documents/upload")
 async def upload_document(file: Annotated[UploadFile, File(...)], document_type: Annotated[str | None, Form()] = None, reprocess: Annotated[bool, Form()] = False, target_farm_id: Annotated[int | None, Form()] = None):
@@ -105,13 +186,7 @@ def dealer_catalogs(organization_id: int):
     return list_catalogs(organization_id)
 
 @app.post("/api/dealers/{organization_id}/catalogs/upload")
-async def upload_seed_catalog(
-    organization_id: int,
-    file: Annotated[UploadFile, File(...)],
-    crop_year: Annotated[int, Form()],
-    catalog_name: Annotated[str, Form()],
-    brand: Annotated[str | None, Form()] = None,
-):
+async def upload_seed_catalog(organization_id: int, file: Annotated[UploadFile, File(...)], crop_year: Annotated[int, Form()], catalog_name: Annotated[str, Form()], brand: Annotated[str | None, Form()] = None):
     suffix = Path(file.filename or "catalog.bin").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp" if os.path.isdir("/tmp") else None) as tmp:
         tmp.write(await file.read())
@@ -186,10 +261,8 @@ def list_prospects():
         for row in result:
             for key in ("crops_json", "metadata_json"):
                 if isinstance(row.get(key), str):
-                    try:
-                        row[key] = json.loads(row[key])
-                    except Exception:
-                        pass
+                    try: row[key] = json.loads(row[key])
+                    except Exception: pass
         return result
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Prospect database is temporarily unavailable.") from exc
@@ -203,70 +276,55 @@ def get_prospect(prospect_id: int):
     prospect = row_to_dict(row) or {}
     for key in ("crops_json", "metadata_json"):
         if isinstance(prospect.get(key), str):
-            try:
-                prospect[key] = json.loads(prospect[key])
-            except Exception:
-                pass
+            try: prospect[key] = json.loads(prospect[key])
+            except Exception: pass
     prospect["farm_context"] = build_farm_context(int(prospect["farm_id"]))
     prospect["soil_status"] = prospect_soil_status(prospect_id)
     return prospect
 
 @app.get("/api/prospects/{prospect_id}/soils")
 def get_prospect_soils(prospect_id: int):
-    try:
-        return prospect_soil_status(prospect_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try: return prospect_soil_status(prospect_id)
+    except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.post("/api/prospects/{prospect_id}/soils/enrich")
 def enrich_prospect_soils(prospect_id: int, force: bool = False):
-    try:
-        return enrich_prospect(prospect_id, force=force)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Soil enrichment failed: {str(exc)[:220]}") from exc
+    try: return enrich_prospect(prospect_id, force=force)
+    except Exception as exc: raise HTTPException(status_code=400, detail=f"Soil enrichment failed: {str(exc)[:220]}") from exc
 
 @app.post("/api/fields/{field_id}/soils/enrich")
 def enrich_one_field(field_id: int, force: bool = False):
-    try:
-        return enrich_field(field_id, force=force)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Field soil enrichment failed: {str(exc)[:220]}") from exc
+    try: return enrich_field(field_id, force=force)
+    except Exception as exc: raise HTTPException(status_code=400, detail=f"Field soil enrichment failed: {str(exc)[:220]}") from exc
 
 @app.put("/api/fields/{field_id}/boundary")
 def update_field_boundary(field_id: int, req: BoundaryRequest):
     try:
         location = set_exact_boundary(field_id, req.boundary_geojson)
         result = {"field_id": field_id, "location": location}
-        if req.enrich_soils:
-            result["soil"] = enrich_field(field_id, force=True)
+        if req.enrich_soils: result["soil"] = enrich_field(field_id, force=True)
         return result
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Boundary could not be saved: {str(exc)[:220]}") from exc
+    except Exception as exc: raise HTTPException(status_code=400, detail=f"Boundary could not be saved: {str(exc)[:220]}") from exc
 
 @app.post("/api/farms/{farm_id}/ai")
 def ai_task(farm_id: int, req: AITaskRequest):
-    try:
-        return run_ai_task(farm_id, req.task_type, req.instruction, req.field_id)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="AI task could not be completed.") from exc
+    try: return run_ai_task(farm_id, req.task_type, req.instruction, req.field_id)
+    except Exception as exc: raise HTTPException(status_code=503, detail="AI task could not be completed.") from exc
 
 @app.post("/api/seed/rank")
 def seed_rank(req: SeedRankRequest):
     return {"ranked": rank_seeds(req.field_profile, req.seeds), "engine_version": "seed-fit-v0.1"}
 
 @app.api_route("/", methods=["GET", "HEAD"])
-def root():
-    return FileResponse(BASE / "index.html")
+def root(): return FileResponse(BASE / "index.html")
 
 @app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):
-    allowed = {"index", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "product-spec", "data-hub"}
-    if page_name not in allowed:
-        raise HTTPException(status_code=404)
+    allowed = {"index", "login", "admin", "dealer-demo", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "product-spec", "data-hub"}
+    if page_name not in allowed: raise HTTPException(status_code=404)
     return FileResponse(BASE / f"{page_name}.html")
 
 @app.api_route("/{asset_name}", methods=["GET", "HEAD"])
 def static_asset(asset_name: str):
-    if asset_name not in {"styles.css", "app.js"}:
-        raise HTTPException(status_code=404)
+    if asset_name not in {"styles.css", "app.js"}: raise HTTPException(status_code=404)
     return FileResponse(BASE / asset_name)

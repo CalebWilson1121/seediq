@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import string
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -18,6 +19,12 @@ def _password_hash(password: str, salt: str) -> str:
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _temporary_password() -> str:
+    alphabet = string.ascii_letters + string.digits
+    core = "".join(secrets.choice(alphabet) for _ in range(10))
+    return f"SeedIQ-{core}!"
 
 
 def login(email: str, password: str) -> dict[str, Any]:
@@ -119,7 +126,9 @@ def dealer_detail(organization_id: int) -> dict[str, Any]:
         if not org:
             raise KeyError("Dealer not found")
         users = rows_to_dicts(conn.execute(
-            "SELECT id,email,display_name,global_role,status,last_login_at,created_at FROM platform_users WHERE organization_id=? ORDER BY display_name",
+            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.last_login_at,u.created_at,COALESCE(dm.role,CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END) AS dealer_role "
+            "FROM platform_users u LEFT JOIN dealer_members dm ON lower(dm.email)=lower(u.email) AND dm.organization_id=u.organization_id "
+            "WHERE u.organization_id=? ORDER BY u.display_name",
             (organization_id,),
         ).fetchall())
         farms = rows_to_dicts(conn.execute(
@@ -159,6 +168,7 @@ def set_user_access(user_id: int, enabled: bool, actor_user_id: int) -> dict[str
             raise ValueError("Super admin access cannot be disabled from the dealer console")
         status = "active" if enabled else "disabled"
         conn.execute("UPDATE platform_users SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (status, user_id))
+        conn.execute("UPDATE dealer_members SET status=?,updated_at=CURRENT_TIMESTAMP WHERE lower(email)=lower(?)", (status, target["email"]))
         if not enabled:
             conn.execute("DELETE FROM user_sessions WHERE user_id=?", (user_id,))
         conn.execute(
@@ -166,6 +176,74 @@ def set_user_access(user_id: int, enabled: bool, actor_user_id: int) -> dict[str
             (actor_user_id, "user_access_changed", "platform_user", str(user_id), '{"enabled":' + ('true' if enabled else 'false') + '}'),
         )
     return {"user_id": user_id, "status": status}
+
+
+def dealer_team(organization_id: int) -> dict[str, Any]:
+    with connect() as conn:
+        org = conn.execute("SELECT id,name,max_seats FROM dealer_organizations WHERE id=?", (organization_id,)).fetchone()
+        if not org:
+            raise KeyError("Dealer not found")
+        users = rows_to_dicts(conn.execute(
+            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.last_login_at,u.created_at,"
+            "COALESCE(dm.role,CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END) AS role "
+            "FROM platform_users u LEFT JOIN dealer_members dm ON lower(dm.email)=lower(u.email) AND dm.organization_id=u.organization_id "
+            "WHERE u.organization_id=? ORDER BY CASE WHEN u.global_role='dealer_admin' THEN 0 ELSE 1 END,u.display_name",
+            (organization_id,),
+        ).fetchall())
+    return {"dealer": dict(org), "seat_count": len(users), "max_seats": org["max_seats"], "users": users}
+
+
+def create_dealer_user(organization_id: int, email: str, display_name: str, role: str, actor_user_id: int) -> dict[str, Any]:
+    role = (role or "salesperson").strip().lower()
+    if role not in {"salesperson", "agronomist", "dealer_admin"}:
+        raise ValueError("Role must be salesperson, agronomist, or dealer_admin")
+    email = email.strip().lower()
+    display_name = display_name.strip()
+    if not email or "@" not in email:
+        raise ValueError("A valid email is required")
+    if not display_name:
+        raise ValueError("Name is required")
+    with connect() as conn:
+        org = conn.execute("SELECT id,name,max_seats FROM dealer_organizations WHERE id=?", (organization_id,)).fetchone()
+        if not org:
+            raise KeyError("Dealer not found")
+        existing = conn.execute("SELECT id FROM platform_users WHERE lower(email)=?", (email,)).fetchone()
+        if existing:
+            raise ValueError("A SeedIQ user with that email already exists")
+        seats = int(conn.execute("SELECT COUNT(*) AS n FROM platform_users WHERE organization_id=?", (organization_id,)).fetchone()["n"] or 0)
+        if org["max_seats"] is not None and seats >= int(org["max_seats"]):
+            raise ValueError("This dealer has reached its licensed seat limit")
+        temp_password = _temporary_password()
+        salt = secrets.token_hex(16)
+        password_hash = _password_hash(temp_password, salt)
+        global_role = "dealer_admin" if role == "dealer_admin" else "dealer_user"
+        user = conn.execute(
+            "INSERT INTO platform_users(email,display_name,password_salt,password_hash,global_role,status,organization_id) VALUES(?,?,?,?,?,'active',?) RETURNING id,email,display_name,global_role,status,created_at",
+            (email, display_name, salt, password_hash, global_role, organization_id),
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO dealer_members(organization_id,email,display_name,role,status,metadata_json) VALUES(?,?,?,?, 'active','{}'::jsonb) "
+            "ON CONFLICT DO NOTHING",
+            (organization_id, email, display_name, role),
+        )
+        conn.execute(
+            "INSERT INTO admin_audit_log(actor_user_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?::jsonb)",
+            (actor_user_id, "dealer_user_created", "platform_user", str(user["id"]), '{"role":"' + role + '"}'),
+        )
+    result = dict(user)
+    result["role"] = role
+    result["temporary_password"] = temp_password
+    return result
+
+
+def set_dealer_team_user_access(organization_id: int, user_id: int, enabled: bool, actor_user_id: int) -> dict[str, Any]:
+    with connect() as conn:
+        target = conn.execute("SELECT id,organization_id,global_role FROM platform_users WHERE id=?", (user_id,)).fetchone()
+        if not target or int(target["organization_id"] or 0) != int(organization_id):
+            raise KeyError("Dealer user not found")
+        if int(target["id"]) == int(actor_user_id) and not enabled:
+            raise ValueError("You cannot disable your own dealer admin account")
+    return set_user_access(user_id, enabled, actor_user_id)
 
 
 def dealer_demo_dashboard(organization_id: int) -> dict[str, Any]:

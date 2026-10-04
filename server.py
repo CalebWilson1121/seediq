@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ai_service import run_ai_task
+from catalog_service import import_catalog, list_catalogs, list_organizations, list_products, publish_catalog
 from context_builder import build_farm_context
 from crop_plan_service import list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
 from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
@@ -20,7 +21,7 @@ from seed_engine import rank_seeds
 from soil_service import enrich_field, enrich_prospect, prospect_soil_status, set_exact_boundary
 
 BASE = Path(__file__).parent
-app = FastAPI(title="SeedIQ Farm Data Engine", version="0.5.0")
+app = FastAPI(title="SeedIQ Seed Sales Platform", version="0.6.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class AITaskRequest(BaseModel):
@@ -68,7 +69,18 @@ def _database_status() -> str:
 def health():
     storage_ready = bool(os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")))
     db_status = _database_status()
-    return {"status": "ok" if db_status == "connected" else "degraded", "architecture": "aph-prospect-mbar-fields-annual-crops-soils-seed-selection", "version": "0.5.0", "database": backend_name(), "database_status": db_status, "storage": "supabase" if storage_ready else "local", "ai": "openai" if os.getenv("OPENAI_API_KEY") else "mock", "soil_source": "USDA NRCS SSURGO / Soil Data Access", "field_source": "MBAR + exact-boundary override"}
+    return {
+        "status": "ok" if db_status == "connected" else "degraded",
+        "architecture": "dealer-orgs-catalogs-aph-mbar-fields-crops-soils-seed-sales",
+        "version": "0.6.0",
+        "database": backend_name(),
+        "database_status": db_status,
+        "storage": "supabase" if storage_ready else "local",
+        "ai": "openai" if os.getenv("OPENAI_API_KEY") else "mock",
+        "seed_catalogs": "annual dealer catalogs",
+        "soil_source": "USDA NRCS SSURGO / Soil Data Access",
+        "field_source": "MBAR + exact-boundary override",
+    }
 
 @app.post("/api/documents/upload")
 async def upload_document(file: Annotated[UploadFile, File(...)], document_type: Annotated[str | None, Form()] = None, reprocess: Annotated[bool, Form()] = False, target_farm_id: Annotated[int | None, Form()] = None):
@@ -83,6 +95,45 @@ async def upload_document(file: Annotated[UploadFile, File(...)], document_type:
         raise HTTPException(status_code=400, detail=f"The document could not be imported: {str(exc)[:220]}") from exc
     finally:
         temp_path.unlink(missing_ok=True)
+
+@app.get("/api/dealers")
+def dealers():
+    return list_organizations()
+
+@app.get("/api/dealers/{organization_id}/catalogs")
+def dealer_catalogs(organization_id: int):
+    return list_catalogs(organization_id)
+
+@app.post("/api/dealers/{organization_id}/catalogs/upload")
+async def upload_seed_catalog(
+    organization_id: int,
+    file: Annotated[UploadFile, File(...)],
+    crop_year: Annotated[int, Form()],
+    catalog_name: Annotated[str, Form()],
+    brand: Annotated[str | None, Form()] = None,
+):
+    suffix = Path(file.filename or "catalog.bin").suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp" if os.path.isdir("/tmp") else None) as tmp:
+        tmp.write(await file.read())
+        temp_path = Path(tmp.name)
+    try:
+        return import_catalog(temp_path, file.filename or "catalog.bin", organization_id, crop_year, catalog_name, brand)
+    except Exception as exc:
+        print(f"SeedIQ catalog upload error: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=400, detail=f"Seed catalog could not be imported: {str(exc)[:220]}") from exc
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+@app.get("/api/catalogs/{catalog_id}/products")
+def catalog_products(catalog_id: int):
+    return list_products(catalog_id)
+
+@app.post("/api/catalogs/{catalog_id}/publish")
+def catalog_publish(catalog_id: int):
+    try:
+        return publish_catalog(catalog_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/api/farms")
 def list_farms():
@@ -135,8 +186,10 @@ def list_prospects():
         for row in result:
             for key in ("crops_json", "metadata_json"):
                 if isinstance(row.get(key), str):
-                    try: row[key] = json.loads(row[key])
-                    except Exception: pass
+                    try:
+                        row[key] = json.loads(row[key])
+                    except Exception:
+                        pass
         return result
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Prospect database is temporarily unavailable.") from exc
@@ -150,55 +203,70 @@ def get_prospect(prospect_id: int):
     prospect = row_to_dict(row) or {}
     for key in ("crops_json", "metadata_json"):
         if isinstance(prospect.get(key), str):
-            try: prospect[key] = json.loads(prospect[key])
-            except Exception: pass
+            try:
+                prospect[key] = json.loads(prospect[key])
+            except Exception:
+                pass
     prospect["farm_context"] = build_farm_context(int(prospect["farm_id"]))
     prospect["soil_status"] = prospect_soil_status(prospect_id)
     return prospect
 
 @app.get("/api/prospects/{prospect_id}/soils")
 def get_prospect_soils(prospect_id: int):
-    try: return prospect_soil_status(prospect_id)
-    except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        return prospect_soil_status(prospect_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.post("/api/prospects/{prospect_id}/soils/enrich")
 def enrich_prospect_soils(prospect_id: int, force: bool = False):
-    try: return enrich_prospect(prospect_id, force=force)
-    except Exception as exc: raise HTTPException(status_code=400, detail=f"Soil enrichment failed: {str(exc)[:220]}") from exc
+    try:
+        return enrich_prospect(prospect_id, force=force)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Soil enrichment failed: {str(exc)[:220]}") from exc
 
 @app.post("/api/fields/{field_id}/soils/enrich")
 def enrich_one_field(field_id: int, force: bool = False):
-    try: return enrich_field(field_id, force=force)
-    except Exception as exc: raise HTTPException(status_code=400, detail=f"Field soil enrichment failed: {str(exc)[:220]}") from exc
+    try:
+        return enrich_field(field_id, force=force)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Field soil enrichment failed: {str(exc)[:220]}") from exc
 
 @app.put("/api/fields/{field_id}/boundary")
 def update_field_boundary(field_id: int, req: BoundaryRequest):
     try:
         location = set_exact_boundary(field_id, req.boundary_geojson)
         result = {"field_id": field_id, "location": location}
-        if req.enrich_soils: result["soil"] = enrich_field(field_id, force=True)
+        if req.enrich_soils:
+            result["soil"] = enrich_field(field_id, force=True)
         return result
-    except Exception as exc: raise HTTPException(status_code=400, detail=f"Boundary could not be saved: {str(exc)[:220]}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Boundary could not be saved: {str(exc)[:220]}") from exc
 
 @app.post("/api/farms/{farm_id}/ai")
 def ai_task(farm_id: int, req: AITaskRequest):
-    try: return run_ai_task(farm_id, req.task_type, req.instruction, req.field_id)
-    except Exception as exc: raise HTTPException(status_code=503, detail="AI task could not be completed.") from exc
+    try:
+        return run_ai_task(farm_id, req.task_type, req.instruction, req.field_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="AI task could not be completed.") from exc
 
 @app.post("/api/seed/rank")
 def seed_rank(req: SeedRankRequest):
     return {"ranked": rank_seeds(req.field_profile, req.seeds), "engine_version": "seed-fit-v0.1"}
 
 @app.api_route("/", methods=["GET", "HEAD"])
-def root(): return FileResponse(BASE / "index.html")
+def root():
+    return FileResponse(BASE / "index.html")
 
 @app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):
     allowed = {"index", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "product-spec", "data-hub"}
-    if page_name not in allowed: raise HTTPException(status_code=404)
+    if page_name not in allowed:
+        raise HTTPException(status_code=404)
     return FileResponse(BASE / f"{page_name}.html")
 
 @app.api_route("/{asset_name}", methods=["GET", "HEAD"])
 def static_asset(asset_name: str):
-    if asset_name not in {"styles.css", "app.js"}: raise HTTPException(status_code=404)
+    if asset_name not in {"styles.css", "app.js"}:
+        raise HTTPException(status_code=404)
     return FileResponse(BASE / asset_name)

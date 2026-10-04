@@ -12,13 +12,13 @@ from pydantic import BaseModel
 
 from ai_service import run_ai_task
 from context_builder import build_farm_context
-from database import connect, init_db, rows_to_dicts
+from database import backend_name, connect, init_db, rows_to_dicts
 from ingestion import ingest_file
 from seed_engine import rank_seeds
 
 BASE = Path(__file__).parent
 
-app = FastAPI(title="SeedIQ Farm Data Engine", version="0.1.0")
+app = FastAPI(title="SeedIQ Farm Data Engine", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,7 +45,15 @@ def startup() -> None:
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "architecture": "read-once-normalize-reuse", "version": "0.1.0"}
+    storage_ready = bool(os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")))
+    return {
+        "status": "ok",
+        "architecture": "read-once-normalize-reuse",
+        "version": "0.2.0",
+        "database": backend_name(),
+        "storage": "supabase" if storage_ready else "local",
+        "ai": "openai" if os.getenv("OPENAI_API_KEY") else "mock",
+    }
 
 
 @app.post("/api/documents/upload")
@@ -54,7 +62,7 @@ async def upload_document(
     document_type: Annotated[str | None, Form()] = None,
 ):
     suffix = Path(file.filename or "upload.bin").suffix
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp" if os.path.isdir("/tmp") else None) as tmp:
         tmp.write(await file.read())
         temp_path = Path(tmp.name)
     try:
@@ -107,3 +115,10 @@ def html_page(page_name: str):
     if page_name not in allowed:
         raise HTTPException(status_code=404)
     return FileResponse(BASE / f"{page_name}.html")
+
+
+@app.api_route("/{asset_name}", methods=["GET", "HEAD"])
+def static_asset(asset_name: str):
+    if asset_name not in {"styles.css", "app.js"}:
+        raise HTTPException(status_code=404)
+    return FileResponse(BASE / asset_name)

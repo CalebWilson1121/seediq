@@ -1,138 +1,57 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>SeedIQ — Farm Data Hub</title><style>
-:root{
-    --bg:#f4f7f2; --panel:#ffffff; --ink:#162319; --muted:#6b776d; --line:#dfe7df;
-    --green:#1f6f43; --green2:#2f8f5b; --lime:#dff2e5; --gold:#c9992d; --red:#b94a48;
-    --shadow:0 14px 35px rgba(26,53,36,.10);
-  }
-  *{box-sizing:border-box}
-  body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
-  .app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
-  .sidebar{background:#102a1d;color:white;padding:22px 18px;position:sticky;top:0;height:100vh}
-  .brand{font-weight:800;font-size:25px;letter-spacing:-.5px}.brand span{color:#8fd39f}
-  .subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}
-  nav{margin-top:30px;display:grid;gap:8px}
-  nav a{display:block;width:100%;border:0;background:transparent;color:#dce8df;text-align:left;padding:12px 13px;border-radius:10px;font-size:14px;cursor:pointer;text-decoration:none}
-  nav a.active,nav a:hover{background:#1d4b33;color:white}
-  .side-card{margin-top:28px;background:#173c29;border:1px solid #2a6041;border-radius:14px;padding:14px;font-size:12px;color:#cfe0d4}
-  .main{padding:26px 30px 45px}
-  .topbar{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:22px}
-  h1,h2,h3,p{margin-top:0}h1{font-size:28px;margin-bottom:5px}h2{font-size:20px}h3{font-size:15px}
-  .muted{color:var(--muted)}
-  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:white;border-radius:999px;padding:8px 12px;font-size:12px}
-  .dot{width:8px;height:8px;background:#43a66d;border-radius:50%}
-  .grid{display:grid;gap:16px}.kpis{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 2px 10px rgba(25,45,32,.03)}
-  .kpi strong{display:block;font-size:27px;margin-top:5px}.kpi span{font-size:12px;color:var(--muted)}
-  .cols{grid-template-columns:1.25fr .75fr}.cols2{grid-template-columns:1fr 1fr}.cols3{grid-template-columns:repeat(3,1fr)}
-  .table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--line);font-size:13px}.table th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}.table tr:last-child td{border-bottom:0}
-  .btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}.btn.primary{background:var(--green);color:white}.btn.secondary{background:#eaf2ed;color:#17452d}.btn.outline{background:white;border:1px solid var(--line);color:var(--ink)}
-  .field-list{display:grid;gap:10px}.field{padding:13px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:#fff}.field.active{border:2px solid var(--green);background:#f7fbf8}.field .row{display:flex;justify-content:space-between;gap:8px}
-  .map{height:315px;border-radius:16px;background:linear-gradient(135deg,#dce8d2,#a8c397);position:relative;overflow:hidden;border:1px solid #c8d7c4}
-  .map:before,.map:after{content:"";position:absolute;border:2px solid rgba(255,255,255,.65);background:rgba(74,130,75,.22);transform:rotate(-7deg)}
-  .map:before{width:200px;height:130px;left:70px;top:70px;border-radius:22px}.map:after{width:150px;height:95px;right:55px;bottom:50px;border-radius:30px}
-  .map-label{position:absolute;left:24px;bottom:18px;background:rgba(16,42,29,.88);color:white;padding:10px 12px;border-radius:10px;font-size:12px}
-  .riskbar{margin:10px 0}.riskrow{display:grid;grid-template-columns:135px 1fr 38px;gap:10px;align-items:center;font-size:12px}.bar{height:8px;background:#e8eee9;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#72b88d,#256d45);border-radius:999px}
-  .recommendation{border:1px solid var(--line);border-radius:14px;padding:15px;margin-top:12px}.recommendation.top{border:2px solid var(--green);background:#fbfefc}.rec-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.score{background:var(--lime);color:#164d31;border-radius:12px;padding:8px 10px;text-align:center;min-width:76px}.score b{font-size:21px;display:block}.tag{display:inline-block;font-size:10px;font-weight:700;padding:5px 8px;border-radius:999px;background:#eef4f0;margin:3px 4px 0 0}.good{background:#e4f5e9;color:#1c6c3d}.warn{background:#fff2d9;color:#8d6517}.danger{background:#fde8e7;color:#9c3735}
-  .chat{background:#f7faf8;border:1px solid var(--line);border-radius:14px;padding:15px}.chat .bubble{background:white;border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin-top:10px;font-size:13px;line-height:1.45}.chat .prompt{color:#1e5d3b;font-weight:700}
-  .hidden{display:none!important}.section{display:none}.section.active{display:block}
-  .farm-plan{display:grid;grid-template-columns:1fr 1fr;gap:15px}.donut{width:170px;height:170px;border-radius:50%;background:conic-gradient(#245f3d 0 30%,#4d8c64 30% 53%,#79a987 53% 72%,#b2c8aa 72% 86%,#d8e2d2 86%);margin:auto;position:relative}.donut:after{content:"2,860 acres";position:absolute;inset:34px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;text-align:center;padding:10px}
-  .timeline{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.step{border:1px solid var(--line);padding:12px;border-radius:12px;background:#fff}.step b{display:block;margin-bottom:4px}.step small{color:var(--muted)}
-  .footer-note{font-size:11px;color:#7a867d;margin-top:18px}
-  .logo-row{display:flex;align-items:center;gap:10px}.avatar{width:36px;height:36px;border-radius:50%;background:#d9e9df;display:grid;place-items:center;font-weight:800;color:#1d5737}
-
-  .hero{background:linear-gradient(135deg,#123822,#1f6f43);color:white;border-radius:18px;padding:22px;box-shadow:var(--shadow)}
-  .hero h1,.hero h2,.hero h3{color:white}.hero .muted{color:#c9ddcf}
-  .split-kpi{display:flex;justify-content:space-between;align-items:flex-end;gap:10px}
-  .big-num{font-size:34px;font-weight:800;letter-spacing:-1px}
-  .mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.mini{padding:12px;border:1px solid var(--line);border-radius:12px;background:#fbfdfb}
-  .packet-page{background:white;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 8px 20px rgba(25,45,32,.06);position:relative;overflow:hidden}.packet-page:before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--green)}
-  .packet-cover{min-height:330px;display:flex;flex-direction:column;justify-content:space-between;background:linear-gradient(135deg,#f4faf5,#e2efe5)}
-  .packet-brand{font-weight:800;font-size:30px;color:var(--green)}
-  .metric-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f7faf8;border:1px solid var(--line);padding:12px;border-radius:12px}.metric b{display:block;font-size:20px}
-  .status{font-size:10px;font-weight:800;padding:5px 8px;border-radius:999px;display:inline-block}.status.hot{background:#fde8e7;color:#963c39}.status.warm{background:#fff0d2;color:#855f14}.status.sent{background:#e7f2ff;color:#2f5f91}.status.won{background:#e4f5e9;color:#1c6c3d}
-  .input,.select,.textarea{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:9px;background:white;font:inherit}.textarea{min-height:90px;resize:vertical}.label{display:block;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
-  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid .full{grid-column:1/-1}
-  .opp-card{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px;background:white}.opp-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-  .callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0;font-size:13px;line-height:1.5}
-
-  @media(max-width:950px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.kpis,.cols,.cols2,.cols3,.farm-plan{grid-template-columns:1fr}.timeline,.metric-row,.mini-grid,.form-grid{grid-template-columns:1fr 1fr}.main{padding:18px}.sidebar nav{grid-template-columns:repeat(3,1fr)}}
-
-
-.dropzone{border:2px dashed #a9c8b2;border-radius:16px;padding:28px;text-align:center;background:#f8fbf8;transition:.2s}.dropzone.drag{border-color:var(--green);background:#edf7f0}.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#102a1d;color:#d7eadc;padding:14px;border-radius:12px;white-space:pre-wrap;font-size:12px;max-height:320px;overflow:auto}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.flow .step2{padding:14px;border-radius:12px;border:1px solid var(--line);background:white;text-align:center;font-size:12px}.flow .step2 b{display:block;margin-bottom:5px}@media(max-width:950px){.flow{grid-template-columns:1fr}}
-</style></head><body>
-<div class="app"><aside class="sidebar"><div class="brand">Seed<span>IQ</span></div><div class="subbrand">Seed Intelligence & Sales Platform</div>
-<nav><a href="index.html">Dashboard</a><a href="farmers.html">Farmer & Fields</a><a href="field-analysis.html">Field Analysis</a><a href="whole-farm-plan.html">Whole-Farm Plan</a><a href="genetics.html">Seed Genetics</a><a href="prospects.html">Prospect Intelligence</a><a href="sales-packet.html">Sales Packet Builder</a><a href="pipeline.html">Sales Pipeline</a><a href="data-hub.html" class="active">Farm Data Hub</a><a href="product-spec.html">Product Spec</a></nav>
-<div class="side-card"><b>Architecture v0.1</b><br><br>Documents are read once, normalized, stored with provenance, then reused by analytics and AI.</div></aside>
-<main class="main"><div class="topbar"><div><div class="muted" style="font-size:12px">Prairie Ridge Seed • Data Infrastructure</div></div><div class="logo-row"><span class="pill"><i class="dot"></i><span id="engineLabel">Checking engine…</span></span><div class="avatar">CW</div></div></div>
-<h1>Farm Data Hub</h1><p class="muted">Upload APH, MBAR and SOI once. SeedIQ converts the source file into a reusable farm record and keeps a trail back to the original document.</p>
-<div class="hero" style="margin-bottom:16px"><h2>Read once. Structure once. Use everywhere.</h2><p class="muted">The original document stays attached for auditability. Agronomy, placement, coverage analysis, CRM signals and AI explanations operate from normalized values instead of repeatedly rereading the file.</p></div>
-<div class="flow" style="margin-bottom:18px"><div class="step2"><b>1. Upload</b>APH / MBAR / SOI</div><div class="step2"><b>2. Parse</b>Known labels & columns</div><div class="step2"><b>3. Normalize</b>Farm / field / crop schema</div><div class="step2"><b>4. Store</b>Values + source lineage</div><div class="step2"><b>5. Reuse</b>Engines + targeted AI</div></div>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SeedIQ — Farm Data Hub</title>
+<style>
+:root{--bg:#f4f7f2;--panel:#fff;--ink:#162319;--muted:#6b776d;--line:#dfe7df;--green:#1f6f43;--green2:#2f8f5b;--lime:#dff2e5;--red:#b94a48;--dark:#102a1d;--shadow:0 10px 28px rgba(26,53,36,.08)}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{background:var(--dark);color:#fff;padding:22px 18px;position:sticky;top:0;height:100vh}.brand{font-size:25px;font-weight:850}.brand span{color:#8fd39f}.subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}nav{display:grid;gap:7px;margin-top:28px}nav a{color:#dce8df;text-decoration:none;padding:11px 12px;border-radius:10px;font-size:14px}nav a:hover,nav a.active{background:#1d4b33;color:#fff}.side-card{margin-top:24px;background:#173c29;border:1px solid #2a6041;border-radius:14px;padding:14px;font-size:12px;color:#cfe0d4;line-height:1.5}
+.main{padding:26px 30px 44px}.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.muted{color:var(--muted)}h1{font-size:29px;margin:0 0 6px}h2{font-size:19px;margin:0 0 8px}p{margin-top:0}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 12px;font-size:12px}.dot{width:8px;height:8px;background:#aaa;border-radius:50%}.dot.ok{background:#43a66d}.dot.bad{background:#d18b3e}.avatar{width:36px;height:36px;border-radius:50%;background:#d9e9df;color:#1d5737;display:grid;place-items:center;font-weight:800}.top-right{display:flex;align-items:center;gap:10px}
+.hero{background:linear-gradient(135deg,#123822,#1f6f43);color:#fff;border-radius:18px;padding:22px;box-shadow:var(--shadow);margin-bottom:16px}.hero p{color:#c9ddcf;margin-bottom:0}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px}.step{padding:14px;border:1px solid var(--line);background:#fff;border-radius:12px;text-align:center;font-size:12px}.step b{display:block;margin-bottom:5px}.grid{display:grid;gap:16px}.cols{grid-template-columns:1.25fr .75fr}.cols2{grid-template-columns:1fr 1fr}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 2px 10px rgba(25,45,32,.03)}
+.callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0;font-size:13px;line-height:1.5}.callout.warn{border-left-color:#d18b3e;background:#fff8ec}.dropzone{border:2px dashed #a9c8b2;border-radius:16px;padding:28px;text-align:center;background:#f8fbf8;transition:.2s}.dropzone.drag{border-color:var(--green);background:#edf7f0}.label{display:block;font-size:11px;color:var(--muted);font-weight:750;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}.select{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:9px;background:#fff;font:inherit}.btn{border:0;border-radius:10px;padding:10px 14px;font-weight:750;cursor:pointer}.btn.primary{background:var(--green);color:#fff}.btn.secondary{background:#eaf2ed;color:#17452d}.btn:disabled{opacity:.45;cursor:not-allowed}.recommendation{border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px;background:#fff}.recommendation.top{border:2px solid var(--green);background:#fbfefc}.table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--line);font-size:13px}.table th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#102a1d;color:#d7eadc;padding:14px;border-radius:12px;white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto}.status-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}.status-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fbfdfb}.status-card b{display:block;font-size:13px}.status-card span{font-size:11px;color:var(--muted)}.footer-note{font-size:11px;color:#7a867d;margin-top:18px}
+@media(max-width:950px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.sidebar nav{grid-template-columns:repeat(2,1fr)}.main{padding:18px}.cols,.cols2,.flow,.status-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+<div class="brand">Seed<span>IQ</span></div><div class="subbrand">Seed Intelligence & Sales Platform</div>
+<nav>
+<a href="index.html">Dashboard</a><a href="farmers.html">Farmer & Fields</a><a href="field-analysis.html">Field Analysis</a><a href="whole-farm-plan.html">Whole-Farm Plan</a><a href="genetics.html">Seed Genetics</a><a href="prospects.html">Prospect Intelligence</a><a href="sales-packet.html">Sales Packet Builder</a><a href="pipeline.html">Sales Pipeline</a><a class="active" href="data-hub.html">Farm Data Hub</a><a href="product-spec.html">Product Spec</a>
+</nav>
+<div class="side-card"><b>Architecture v0.2</b><br><br>Original files → private Supabase Storage<br>Normalized facts → Supabase Postgres<br>AI → compact structured context only</div>
+</aside>
+<main class="main">
+<div class="topbar"><div><div class="muted" style="font-size:12px">Prairie Ridge Seed • Data Infrastructure</div></div><div class="top-right"><span class="pill"><i id="engineDot" class="dot"></i><span id="engineLabel">Checking engine…</span></span><div class="avatar">CW</div></div></div>
+<h1>Farm Data Hub</h1><p class="muted">Upload APH, MBAR and SOI once. SeedIQ normalizes the source into a reusable farm record while retaining the original document for auditability.</p>
+<div class="hero"><h2>Read once. Structure once. Use everywhere.</h2><p>Placement, agronomy, coverage analysis, CRM signals, prospect packets and AI explanations all work from the same normalized farm data instead of repeatedly sending source documents back to AI.</p></div>
+<div class="flow"><div class="step"><b>1. Upload</b>APH / MBAR / SOI</div><div class="step"><b>2. Parse</b>Known labels & columns</div><div class="step"><b>3. Normalize</b>Farm / field / crop schema</div><div class="step"><b>4. Store</b>Data + source lineage</div><div class="step"><b>5. Reuse</b>Engines + targeted AI</div></div>
 <div class="grid cols">
-<div class="card"><h2>Upload source document</h2><p class="muted">Starter accepts CSV, XLSX, JSON, TXT and text-based PDF. The included sample CSVs are mapped to the normalized schema.</p>
-<div id="backendStatus" class="callout" style="margin:12px 0"><b>Checking Farm Data Engine…</b><br><span class="muted">Uploads require the Python API to be running on the same site.</span></div>
-<form id="uploadForm"><label class="label">Document type</label><select id="docType" class="select" style="margin-bottom:12px"><option value="">Auto-detect</option><option>APH</option><option>MBAR</option><option>SOI</option></select>
-<div class="dropzone" id="dropzone"><b>Drop a file here</b><p class="muted" style="margin:7px 0">or select from your computer</p><input id="fileInput" type="file" accept=".csv,.xlsx,.xlsm,.json,.txt,.pdf"></div>
-<div style="display:flex;gap:10px;margin-top:14px"><button class="btn primary" type="submit">Read & Normalize</button><button type="button" class="btn secondary" onclick="loadFarms()">Refresh Farms</button></div></form>
-<div id="uploadStatus" class="callout" style="margin-top:14px;display:none"></div></div>
-<div class="card"><h2>What gets stored</h2><div class="recommendation top"><b>Normalized farm record</b><p style="margin:5px 0 0;font-size:13px">Producer, farm, fields, acres, crop, practice, APH, production history, coverage and unit structure.</p></div><div class="recommendation"><b>Source lineage</b><p style="margin:5px 0 0;font-size:13px">Every extracted value can retain its document ID, row/page locator and confidence.</p></div><div class="recommendation"><b>AI context</b><p style="margin:5px 0 0;font-size:13px">Only compact structured values are passed to AI when an explanation or narrative is requested.</p></div></div></div>
-<div class="card" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:center"><div><h2>Imported farms</h2><p class="muted">Click a farm to inspect the exact structured context available to the rest of SeedIQ.</p></div></div><div id="farmsTable"><p class="muted">No backend connection yet.</p></div></div>
-<div class="grid cols2" style="margin-top:16px"><div class="card"><h2>Structured farm context</h2><div class="code" id="contextBox">Select an imported farm.</div></div><div class="card"><h2>AI context test</h2><p class="muted">This currently uses a zero-cost mock provider to prove that AI receives structured context rather than the original APH/MBAR/SOI.</p><button class="btn primary" id="aiBtn" disabled>Generate farm summary</button><div class="callout" id="aiOut" style="margin-top:14px">Import and select a farm first.</div></div></div>
-<div class="footer-note">Prototype backend. Carrier/AIP-specific APH, MBAR and SOI layouts still need individual parser mappings and validation before production use.</div>
+<div class="card"><h2>Upload source document</h2><p class="muted">CSV, XLSX, JSON, TXT and text-based PDFs are supported by the starter parser. Carrier-specific PDF mappings will be added as we validate real forms.</p>
+<div id="backendStatus" class="callout"><b>Checking Farm Data Engine…</b><br><span class="muted">The upload button activates when Vercel, Supabase and the API are connected.</span></div>
+<div style="height:13px"></div><label class="label">Document type</label><select id="docType" class="select"><option value="">Auto-detect</option><option value="APH">APH</option><option value="MBAR">MBAR</option><option value="SOI">SOI</option></select>
+<div style="height:12px"></div><div class="dropzone" id="dropzone"><b>Drop a file here</b><p class="muted" style="margin:7px 0">or select from your computer</p><input id="fileInput" type="file" accept=".csv,.xlsx,.xlsm,.json,.txt,.pdf"></div>
+<div style="display:flex;gap:10px;margin-top:14px"><button id="uploadBtn" class="btn primary" disabled>Read & Normalize</button><button id="refreshBtn" class="btn secondary">Refresh Farms</button></div>
+<div id="uploadStatus" class="callout" style="margin-top:14px;display:none"></div>
+</div>
+<div class="card"><h2>Live architecture</h2><div class="status-grid"><div class="status-card"><b id="dbState">Database</b><span>Checking…</span></div><div class="status-card"><b id="storageState">Storage</b><span>Checking…</span></div><div class="status-card"><b id="aiState">AI</b><span>Checking…</span></div></div>
+<div class="recommendation top"><b>Normalized farm record</b><p style="font-size:13px;margin:6px 0 0">Producer, farm, fields, acres, crop, practice, production history, APH, coverage and unit structure.</p></div><div class="recommendation"><b>Source lineage</b><p style="font-size:13px;margin:6px 0 0">Each extracted fact retains its source document, locator and parser provenance.</p></div><div class="recommendation"><b>AI boundary</b><p style="font-size:13px;margin:6px 0 0">AI receives selected structured farm context—not the full APH/MBAR/SOI every time.</p></div></div>
+</div>
+<div class="card" style="margin-top:16px"><h2>Imported farms</h2><p class="muted">Open a farm to inspect the exact reusable data object available to SeedIQ.</p><div id="farmsTable"><p class="muted">Connecting…</p></div></div>
+<div class="grid cols2" style="margin-top:16px"><div class="card"><h2>Structured farm context</h2><div id="contextBox" class="code">Select an imported farm.</div></div><div class="card"><h2>AI context test</h2><p class="muted">If an OpenAI key is configured, SeedIQ sends only this compact structured context. Otherwise the backend uses its zero-cost mock provider.</p><button id="aiBtn" class="btn primary" disabled>Generate farm summary</button><div id="aiOut" class="callout" style="margin-top:14px">Import and select a farm first.</div></div></div>
+<div class="footer-note">SeedIQ Farm Data Engine v0.2 • Backend-only database access is intentionally locked down with RLS. User-level policies will be added with authentication.</div>
 </main></div>
 <script>
-let selectedFarm=null;
-const $=id=>document.getElementById(id);
-let backendOnline=false;
-async function api(path,options={}){
-  const r=await fetch(path,options);
-  const contentType=r.headers.get('content-type')||'';
-  if(!r.ok){
-    let detail='HTTP '+r.status;
-    try{ detail=contentType.includes('application/json') ? (await r.json()).detail || detail : (await r.text()).slice(0,500) || detail; }catch(e){}
-    throw new Error(detail);
-  }
-  if(!contentType.includes('application/json')) throw new Error('This host is serving only the static SeedIQ pages; the Farm Data Engine API is not running.');
-  return r.json();
-}
-async function health(){
-  const box=$('backendStatus');
-  try{
-    const h=await api('/api/health');
-    backendOnline=true;
-    $('engineLabel').textContent='Farm Data Engine Online';
-    box.innerHTML='<b style="color:#17663b">● Farm Data Engine connected</b><br><span class="muted">Read-once upload and normalization are available on this deployment.</span>';
-    $('uploadBtn').disabled=false;
-    loadFarms();
-  }catch(e){
-    backendOnline=false;
-    $('engineLabel').textContent='Static Frontend Only';
-    box.innerHTML='<b style="color:#9a5a12">● Backend not connected</b><br><span class="muted">The page is working, but this host is not running <code>server.py</code>. PDF/APH uploads cannot work on a static-only deployment. Deploy this repo as the included FastAPI web service, then uploads will use the same URL.</span>';
-    $('uploadBtn').disabled=false;
-  }
-}
-$('uploadForm').addEventListener('submit',async e=>{
-  e.preventDefault();
-  const f=$('fileInput').files[0];
-  if(!f)return alert('Choose a file first.');
-  $('uploadStatus').style.display='block';
-  if(!backendOnline){
-    $('uploadStatus').innerHTML='<b>Backend required.</b> This page is currently on a static host, so it cannot accept document POST uploads. Deploy the repo using <code>render.yaml</code>, <code>Dockerfile</code>, or run <code>uvicorn server:app</code>. The 405 error was from the static host—not the APH file.';
-    return;
-  }
-  const fd=new FormData();
-  fd.append('file',f);
-  if($('docType').value)fd.append('document_type',$('docType').value);
-  $('uploadStatus').textContent='Reading and normalizing…';
-  try{
-    const res=await api('/api/documents/upload',{method:'POST',body:fd});
-    const warn=(res.warnings||[]).length?' <br><span class="muted">'+res.warnings.join(' ')+'</span>':'';
-    $('uploadStatus').innerHTML='<b>Imported.</b> '+res.document_type+' • '+(res.fields_created_or_updated||0)+' fields • '+(res.crop_records_created||0)+' crop records • '+(res.facts_stored||0)+' source facts.'+warn;
-    loadFarms();
-  }catch(err){$('uploadStatus').innerHTML='<b>Upload failed.</b> '+err.message}
-});
-async function loadFarms(){try{const farms=await api('/api/farms');$('farmsTable').innerHTML=farms.length?'<table class="table"><thead><tr><th>Farm</th><th>Producer</th><th>Action</th></tr></thead><tbody>'+farms.map(f=>`<tr><td><b>${f.farm_name||'Imported Farm'}</b></td><td>${f.producer_name||'—'}</td><td><button class="btn secondary" onclick="openFarm(${f.id})">Inspect context</button></td></tr>`).join('')+'</tbody></table>':'<p class="muted">No farms imported yet. Try sample_aph.csv.</p>'}catch(e){}}
-async function openFarm(id){selectedFarm=id;const c=await api('/api/farms/'+id+'/context');$('contextBox').textContent=JSON.stringify(c,null,2);$('aiBtn').disabled=false;$('aiOut').textContent='Structured context loaded. AI can now work without rereading the original document.'}
-$('aiBtn').addEventListener('click',async()=>{if(!selectedFarm)return;try{const r=await api('/api/farms/'+selectedFarm+'/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:'farm_summary',instruction:'Summarize this operation for an agronomist.'})});$('aiOut').innerHTML='<b>AI layer result:</b><br>'+r.output}catch(e){$('aiOut').textContent=e.message}});
-const dz=$('dropzone');['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag')}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag')}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files.length){$('fileInput').files=e.dataTransfer.files}});health();
-</script></body></html>
+const $=id=>document.getElementById(id);let selectedFarm=null,backendOnline=false;
+async function api(path,options={}){const r=await fetch(path,options);const ct=r.headers.get('content-type')||'';if(!r.ok){let d='HTTP '+r.status;try{d=ct.includes('json')?((await r.json()).detail||d):((await r.text()).slice(0,400)||d)}catch{}throw new Error(d)}if(!ct.includes('application/json'))throw new Error('API did not return JSON');return r.json()}
+async function health(){try{const h=await api('/api/health');backendOnline=true;$('engineLabel').textContent='Farm Data Engine Online';$('engineDot').className='dot ok';$('backendStatus').innerHTML='<b style="color:#17663b">● Connected</b><br><span class="muted">Vercel API is running. Documents can now be normalized into Supabase.</span>';$('uploadBtn').disabled=false;$('dbState').innerHTML='Database<br><span>'+h.database+'</span>';$('storageState').innerHTML='Storage<br><span>'+h.storage+'</span>';$('aiState').innerHTML='AI<br><span>'+h.ai+'</span>';await loadFarms()}catch(e){backendOnline=false;$('engineLabel').textContent='Backend Offline';$('engineDot').className='dot bad';$('backendStatus').className='callout warn';$('backendStatus').innerHTML='<b>Backend unavailable</b><br><span class="muted">'+e.message+'</span>';}}
+async function loadFarms(){if(!backendOnline)return;try{const farms=await api('/api/farms');$('farmsTable').innerHTML=farms.length?'<table class="table"><thead><tr><th>Farm</th><th>Producer</th><th>Action</th></tr></thead><tbody>'+farms.map(f=>`<tr><td><b>${esc(f.farm_name||'Imported Farm')}</b></td><td>${esc(f.producer_name||'—')}</td><td><button class="btn secondary" onclick="openFarm(${f.id})">Inspect context</button></td></tr>`).join('')+'</tbody></table>':'<p class="muted">No farms imported yet.</p>'}catch(e){$('farmsTable').innerHTML='<div class="callout warn">'+esc(e.message)+'</div>'}}
+function esc(v){return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+async function openFarm(id){selectedFarm=id;const c=await api('/api/farms/'+id+'/context');$('contextBox').textContent=JSON.stringify(c,null,2);$('aiBtn').disabled=false;$('aiOut').textContent='Structured context loaded. AI can work from this object without rereading the source document.'}
+$('uploadBtn').addEventListener('click',async()=>{const f=$('fileInput').files[0];if(!f)return alert('Choose a file first.');const fd=new FormData();fd.append('file',f);if($('docType').value)fd.append('document_type',$('docType').value);$('uploadStatus').style.display='block';$('uploadStatus').className='callout';$('uploadStatus').textContent='Reading, normalizing and storing…';$('uploadBtn').disabled=true;try{const r=await api('/api/documents/upload',{method:'POST',body:fd});$('uploadStatus').innerHTML=r.duplicate?'<b>Already imported.</b> SeedIQ found the same source file and reused the stored record.':'<b>Imported.</b> '+esc(r.document_type)+' • '+(r.fields_created_or_updated||0)+' fields • '+(r.crop_records_created||0)+' crop records • '+(r.facts_stored||0)+' source facts.';await loadFarms();if(r.farm_id)await openFarm(r.farm_id)}catch(e){$('uploadStatus').className='callout warn';$('uploadStatus').innerHTML='<b>Upload failed.</b> '+esc(e.message)}finally{$('uploadBtn').disabled=!backendOnline}});
+$('refreshBtn').addEventListener('click',loadFarms);$('aiBtn').addEventListener('click',async()=>{if(!selectedFarm)return;$('aiBtn').disabled=true;try{const r=await api('/api/farms/'+selectedFarm+'/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:'farm_summary',instruction:'Summarize this operation for an agronomist and identify missing data needed for seed placement.'})});$('aiOut').innerHTML='<b>'+esc(r.provider)+' / '+esc(r.model||'')+'</b><br>'+esc(r.output)}catch(e){$('aiOut').className='callout warn';$('aiOut').textContent=e.message}finally{$('aiBtn').disabled=false}});
+const dz=$('dropzone');['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag')}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag')}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files.length)$('fileInput').files=e.dataTransfer.files});health();
+</script>
+</body></html>

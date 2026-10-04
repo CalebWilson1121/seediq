@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ai_service import run_ai_task
-from auth_service import admin_overview, current_user, dealer_demo_dashboard, dealer_detail, login, logout, require_role, set_dealer_access, set_user_access
+from auth_service import admin_overview, create_dealer_user, current_user, dealer_demo_dashboard, dealer_detail, dealer_team, login, logout, require_role, set_dealer_access, set_dealer_team_user_access, set_user_access
 from catalog_service import import_catalog, list_catalogs, list_organizations, list_products, publish_catalog
 from context_builder import build_farm_context
 from crop_plan_service import list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
@@ -23,7 +23,7 @@ from soil_service import enrich_field, enrich_prospect, prospect_soil_status, se
 
 BASE = Path(__file__).parent
 SESSION_COOKIE = "seediq_session"
-app = FastAPI(title="SeedIQ Seed Sales Platform", version="0.7.0")
+app = FastAPI(title="SeedIQ Seed Sales Platform", version="0.8.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class LoginRequest(BaseModel):
@@ -32,6 +32,11 @@ class LoginRequest(BaseModel):
 
 class AccessRequest(BaseModel):
     enabled: bool
+
+class TeamUserRequest(BaseModel):
+    email: str
+    display_name: str
+    role: str = "salesperson"
 
 class AITaskRequest(BaseModel):
     task_type: str = "farm_summary"
@@ -89,13 +94,13 @@ def health():
     db_status = _database_status()
     return {
         "status": "ok" if db_status == "connected" else "degraded",
-        "architecture": "super-admin-dealer-orgs-catalogs-aph-mbar-fields-crops-soils-seed-sales",
-        "version": "0.7.0",
+        "architecture": "super-admin-dealer-team-catalogs-aph-mbar-fields-crops-soils-seed-sales",
+        "version": "0.8.0",
         "database": backend_name(),
         "database_status": db_status,
         "storage": "supabase" if storage_ready else "local",
         "ai": "openai" if os.getenv("OPENAI_API_KEY") else "mock",
-        "access_control": "session-auth + dealer on/off + user on/off",
+        "access_control": "session-auth + dealer on/off + user on/off + dealer-managed team",
         "seed_catalogs": "annual dealer catalogs",
         "soil_source": "USDA NRCS SSURGO / Soil Data Access",
         "field_source": "MBAR + exact-boundary override",
@@ -162,6 +167,40 @@ def dealer_dashboard(request: Request):
     if user.get("organization_id") is None:
         raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
     return dealer_demo_dashboard(int(user["organization_id"]))
+
+@app.get("/api/dealer/team")
+def get_dealer_team(request: Request):
+    user = _require(request, "dealer_admin")
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+    try:
+        return dealer_team(int(user["organization_id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.post("/api/dealer/team")
+def add_dealer_team_user(req: TeamUserRequest, request: Request):
+    user = _require(request, "dealer_admin")
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+    try:
+        return create_dealer_user(int(user["organization_id"]), req.email, req.display_name, req.role, int(user["id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.put("/api/dealer/team/{user_id}/access")
+def dealer_team_user_access(user_id: int, req: AccessRequest, request: Request):
+    user = _require(request, "dealer_admin")
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+    try:
+        return set_dealer_team_user_access(int(user["organization_id"]), user_id, req.enabled, int(user["id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.post("/api/documents/upload")
 async def upload_document(file: Annotated[UploadFile, File(...)], document_type: Annotated[str | None, Form()] = None, reprocess: Annotated[bool, Form()] = False, target_farm_id: Annotated[int | None, Form()] = None):

@@ -13,16 +13,10 @@ FIELD_RE = re.compile(
     r"f(?P<nau>\d+)\s+F(?P<farm>\d+)-T(?P<tract>\d+)-(?P<field>\d+)\s+(?P<acres>[0-9.]+)A",
     re.I,
 )
-
-# We intentionally keep only agronomic practice useful to SeedIQ. Insurance
-# premium, liability, coverage, elections, unit structure, etc. stay scrubbed.
-PRACTICE_PATTERNS = [
-    re.compile(r"\b(NFAC-(?:NIRR|IRR)/(?:NTS|GSG))\b", re.I),
-    re.compile(r"\b(NON\s+IRR/(?:NTS|GSG))\b", re.I),
-    re.compile(r"\b(IRRIGATED/(?:NTS|GSG))\b", re.I),
-    re.compile(r"\b(NIRR/(?:NTS|GSG))\b", re.I),
-    re.compile(r"\b(IRR/(?:NTS|GSG))\b", re.I),
-]
+PRACTICE_RE = re.compile(
+    r"\b(NFAC-(?:NIRR|IRR)/(?:NTS|GSG)|NON\s+IRR/(?:NTS|GSG)|IRRIGATED/(?:NTS|GSG)|NIRR/(?:NTS|GSG)|IRR/(?:NTS|GSG))\b",
+    re.I,
+)
 
 
 def _normalize_irrigation(raw: str | None) -> str | None:
@@ -36,35 +30,38 @@ def _normalize_irrigation(raw: str | None) -> str | None:
     return None
 
 
-def _nearest_practice(text: str, position: int) -> str | None:
-    window = text[max(0, position - 1700):position]
-    candidates: list[tuple[int, str]] = []
-    for pattern in PRACTICE_PATTERNS:
-        for match in pattern.finditer(window):
-            candidates.append((match.end(), re.sub(r"\s+", " ", match.group(1).upper()).strip()))
-    return max(candidates, default=(0, None), key=lambda x: x[0])[1]
-
-
 def _field_practices(path: Path) -> dict[tuple[str, str, str], dict[str, str]]:
+    # NAU sometimes prints "Field Location Identification Continued" at the top
+    # of a page and the Practice/Type line below it, or carries a field across a
+    # page break. Search the complete extracted document and assign each field the
+    # nearest IRR/NIRR practice within a tight neighborhood instead of assuming the
+    # practice always precedes the field text on the same page.
     reader = PdfReader(str(path))
+    page_texts = [(page.extract_text() or "") for page in reader.pages]
+    full_text = "\n\n<<<PAGE_BREAK>>>\n\n".join(page_texts)
+    practices = [
+        (m.start(), m.end(), re.sub(r"\s+", " ", m.group(1).upper()).strip())
+        for m in PRACTICE_RE.finditer(full_text)
+    ]
     found: dict[tuple[str, str, str], dict[str, str]] = {}
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        for block in re.finditer(
-            r"Field Location Identification(?: Continued)?:\s*(.*?)(?=\d{4}\s+Total Prod|Other:|Tenant/ Landlord|$)",
-            text,
-            re.I | re.S,
-        ):
-            practice = _nearest_practice(text, block.start())
-            irrigation = _normalize_irrigation(practice)
-            if not irrigation:
-                continue
-            for match in FIELD_RE.finditer(block.group(1)):
-                g = match.groupdict()
-                found[(g["farm"], g["tract"], g["field"])] = {
-                    "irrigation": irrigation,
-                    "practice": practice or irrigation,
-                }
+    for field_match in FIELD_RE.finditer(full_text):
+        g = field_match.groupdict()
+        center = (field_match.start() + field_match.end()) // 2
+        nearby = []
+        for start, end, practice in practices:
+            distance = min(abs(start - center), abs(end - center))
+            if distance <= 3000:
+                nearby.append((distance, practice))
+        if not nearby:
+            continue
+        practice = min(nearby, key=lambda item: item[0])[1]
+        irrigation = _normalize_irrigation(practice)
+        if not irrigation:
+            continue
+        found[(g["farm"], g["tract"], g["field"])] = {
+            "irrigation": irrigation,
+            "practice": practice,
+        }
     return found
 
 
@@ -88,8 +85,9 @@ def parse_nau_mapped_soi_pdf_with_agronomics(path: Path):
         field.metadata["source_irrigation"] = agronomic["irrigation"]
         field.metadata["source_practice"] = agronomic["practice"]
         entity_key = "|".join(key)
-        parsed.facts.append(SourceFact("mapped_soi_field", entity_key, "irrigation", agronomic["irrigation"], source_locator=f"page:{field.metadata.get('source_page')}", confidence=0.99))
-        parsed.facts.append(SourceFact("mapped_soi_field", entity_key, "agronomic_practice", agronomic["practice"], source_locator=f"page:{field.metadata.get('source_page')}", confidence=0.99))
+        locator = f"page:{field.metadata.get('source_page')}"
+        parsed.facts.append(SourceFact("mapped_soi_field", entity_key, "irrigation", agronomic["irrigation"], source_locator=locator, confidence=0.99))
+        parsed.facts.append(SourceFact("mapped_soi_field", entity_key, "agronomic_practice", agronomic["practice"], source_locator=locator, confidence=0.99))
         classified += 1
 
     parsed.warnings.append(

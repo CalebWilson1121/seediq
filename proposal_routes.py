@@ -104,6 +104,7 @@ def _full_proposal(row: dict[str, Any]) -> dict[str, Any]:
     return {**row, **base, "summary": _proposal_summary(int(row["farm_id"]), int(row["crop_year"]))}
 
 
+@router.api_route("/farmer-proposal", methods=["GET", "HEAD"])
 @router.api_route("/farmer-proposal.html", methods=["GET", "HEAD"])
 def farmer_proposal_page():
     return FileResponse(BASE / "farmer-proposal.html")

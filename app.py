@@ -12,3 +12,12 @@ app.include_router(large_upload_router)
 app.include_router(seed_planning_router)
 app.include_router(channel_fit_router)
 app.include_router(proposal_router)
+
+# server.py has a generic /{page_name}.html route. Keep the farmer share page
+# ahead of that catch-all so public proposal links resolve instead of returning 404.
+routes = app.router.routes
+share_route = next((r for r in routes if getattr(r, "path", None) == "/farmer-proposal.html"), None)
+html_catchall = next((r for r in routes if getattr(r, "path", None) == "/{page_name}.html"), None)
+if share_route is not None and html_catchall is not None:
+    routes.remove(share_route)
+    routes.insert(routes.index(html_catchall), share_route)

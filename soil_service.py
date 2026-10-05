@@ -298,7 +298,7 @@ def prospect_soil_status(prospect_id: int) -> dict[str, Any]:
         if not prospect:
             raise KeyError(f"Prospect {prospect_id} not found")
         rows = conn.execute(
-            "SELECT f.id as field_id,f.name,f.crop,f.practice,f.acres,f.metadata_json,fl.source as location_source,fl.source_reference,fl.centroid_lat,fl.centroid_lon,fl.confidence,fs.status as soil_status,fs.total_area_acres,fs.dominant_musym,fs.dominant_muname,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary,fs.hydrologic_group_summary,fs.mapunits_json "
+            "SELECT f.id as field_id,f.name,f.crop,f.practice,f.acres,f.metadata_json,fl.source as location_source,fl.source_reference,fl.boundary_geojson,fl.centroid_lat,fl.centroid_lon,fl.confidence,fs.status as soil_status,fs.total_area_acres,fs.dominant_musym,fs.dominant_muname,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary,fs.hydrologic_group_summary,fs.mapunits_json "
             "FROM fields f LEFT JOIN field_locations fl ON fl.field_id=f.id LEFT JOIN field_soils fs ON fs.field_id=f.id WHERE f.farm_id=? ORDER BY f.crop,f.name",
             (prospect["farm_id"],),
         ).fetchall()
@@ -306,6 +306,7 @@ def prospect_soil_status(prospect_id: int) -> dict[str, Any]:
     for row in rows:
         d = dict(row)
         d["metadata"] = _loads(d.pop("metadata_json", None), {})
+        d["boundary_geojson"] = _loads(d.get("boundary_geojson"), None)
         d["drainage_summary"] = _loads(d.get("drainage_summary"), {})
         d["hydrologic_group_summary"] = _loads(d.get("hydrologic_group_summary"), {})
         d["mapunits"] = _loads(d.pop("mapunits_json", None), [])

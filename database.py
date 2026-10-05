@@ -165,7 +165,16 @@ def _postgres_connection():
     from psycopg.rows import dict_row
 
     url = _clean_postgres_url(os.environ["POSTGRES_URL"])
-    return psycopg.connect(url, row_factory=dict_row, connect_timeout=10)
+    # Supabase/Vercel commonly connect through a transaction pooler. Named
+    # prepared statements are session-scoped and can collide when pooled
+    # server connections are reused (e.g. DuplicatePreparedStatement: _pg3_0).
+    # Disable automatic server-side prepare so every request is pooler-safe.
+    return psycopg.connect(
+        url,
+        row_factory=dict_row,
+        connect_timeout=10,
+        prepare_threshold=None,
+    )
 
 
 class ConnectionAdapter:

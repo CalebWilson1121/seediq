@@ -11,7 +11,7 @@ from pypdf import PdfReader
 
 from models import CropRecord, ParsedDocument, ParsedField, SourceFact
 
-PARSER_VERSION = "0.3.0"
+PARSER_VERSION = "0.4.0"
 
 ALIASES = {
     "producer": {"producer", "producer name", "insured", "insured name", "grower"},
@@ -59,6 +59,8 @@ def _num(v: Any) -> float | None:
 
 def detect_document_type(filename: str, preview: str = "") -> str:
     text = f"{filename} {preview[:4000]}".lower()
+    if "schedule of insurance" in text and "available units for map view" in text:
+        return "SOI"
     if "mbar" in text or "acreage report" in text:
         return "MBAR"
     if "summary of insurance" in text or re.search(r"\bsoi\b", text):
@@ -151,6 +153,11 @@ def parse_document(path: Path, forced_type: str | None = None) -> tuple[ParsedDo
     ext = path.suffix.lower()
     preview = read_text(path)
     doc_type = (forced_type or detect_document_type(path.name, preview)).upper()
+
+    if ext == ".pdf":
+        from nau_mapped_soi_parser import looks_like_nau_mapped_soi, parse_nau_mapped_soi_pdf
+        if looks_like_nau_mapped_soi(preview):
+            return parse_nau_mapped_soi_pdf(path), "nau-mapped-soi-v0.1"
 
     if doc_type == "MBAR":
         from mbar_parser import parse_mbar_pdf_text, parse_mbar_rows

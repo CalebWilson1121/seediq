@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
+import math
 import os
-from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from shapely.geometry import mapping, shape
+from PIL import Image, ImageDraw
+from shapely.geometry import shape
 
 from database import connect, row_to_dict
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-MAX_MAPBOX_URL_CHARS = 7600
+MAP_WIDTH = 600
+MAP_HEIGHT = 360
+MAP_SCALE = 2
+MAP_PADDING = 44
+TILE_SIZE = 512
 
 
 def _loads_boundary(value):
@@ -49,105 +55,130 @@ def _field_boundary(public_token: str, field_id: int):
     geometry = boundary.get("geometry") if boundary.get("type") == "Feature" else boundary
     if not isinstance(geometry, dict) or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
         raise HTTPException(status_code=422, detail="Unsupported field boundary")
-    return geometry
-
-
-def _feature(geometry: dict):
-    return {
-        "type": "Feature",
-        "properties": {
-            "stroke": "#146b39",
-            "stroke-width": 4,
-            "stroke-opacity": 1,
-            "fill": "#32a05a",
-            "fill-opacity": 0.18,
-        },
-        "geometry": geometry,
-    }
-
-
-def _url_for_feature(feature: dict, mapbox_key: str, username: str, style_id: str):
-    overlay = quote(json.dumps(feature, separators=(",", ":")), safe="")
-    credential = quote(mapbox_key, safe="")
-    return (
-        f"https://api.mapbox.com/styles/v1/{username}/{style_id}/static/"
-        f"geojson({overlay})/auto/600x360@2x?padding=36&logo=true&attribution=true&access_token={credential}"
-    )
-
-
-def _simplify_for_static_map(geometry: dict, mapbox_key: str, username: str, style_id: str):
-    """Reduce raster-derived stair-step polygons before putting them in a URL.
-
-    Mapped-SOI polygons can contain thousands of tiny vertices. Mapbox Static Images
-    accepts GeoJSON overlays in the request URL, so those raw polygons can exceed
-    practical URL limits. Simplification preserves the field outline while removing
-    pixel-scale steps that are invisible in a 600x360 map image.
-    """
     try:
         geom = shape(geometry)
-    except Exception:
-        return geometry
-
-    if geom.is_empty:
-        return geometry
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Invalid field boundary") from exc
     if not geom.is_valid:
         geom = geom.buffer(0)
     if geom.is_empty:
-        return geometry
-
-    # Degree tolerances roughly span sub-meter to tens-of-meters at Kansas latitudes.
-    # Start very conservative and only increase when needed to fit the Static API URL.
-    tolerances = [0.0, 0.0000025, 0.000005, 0.00001, 0.00002, 0.00004, 0.00008, 0.00015, 0.0003]
-    best = geom
-    for tolerance in tolerances:
-        candidate = geom if tolerance == 0 else geom.simplify(tolerance, preserve_topology=True)
-        if candidate.is_empty:
-            continue
-        if candidate.geom_type not in {"Polygon", "MultiPolygon"}:
-            continue
-        best = candidate
-        candidate_geojson = mapping(candidate)
-        url = _url_for_feature(_feature(candidate_geojson), mapbox_key, username, style_id)
-        if len(url) <= MAX_MAPBOX_URL_CHARS:
-            return candidate_geojson
-
-    # Last-resort visual fallback: use a lightly buffered convex hull rather than fail
-    # the entire proposal. This still places the field correctly on the aerial image.
-    hull = geom.convex_hull
-    return mapping(hull if not hull.is_empty else best)
+        raise HTTPException(status_code=422, detail="Empty field boundary")
+    return geom
 
 
-def _static_image_url(geometry: dict):
-    mapbox_key = os.getenv("MAPBOX_TOKEN")
-    if not mapbox_key:
+def _mercator_xy(lon: float, lat: float):
+    lat = max(-85.05112878, min(85.05112878, lat))
+    x = (lon + 180.0) / 360.0
+    siny = math.sin(math.radians(lat))
+    y = 0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi)
+    return x, y
+
+
+def _lonlat_from_mercator(x: float, y: float):
+    lon = x * 360.0 - 180.0
+    n = math.pi - 2.0 * math.pi * y
+    lat = math.degrees(math.atan(math.sinh(n)))
+    return lon, lat
+
+
+def _camera_for_geometry(geom):
+    min_lon, min_lat, max_lon, max_lat = geom.bounds
+    x1, y2 = _mercator_xy(min_lon, min_lat)
+    x2, y1 = _mercator_xy(max_lon, max_lat)
+    min_x, max_x = min(x1, x2), max(x1, x2)
+    min_y, max_y = min(y1, y2), max(y1, y2)
+    span_x = max(max_x - min_x, 1e-9)
+    span_y = max(max_y - min_y, 1e-9)
+    usable_w = max(100, MAP_WIDTH - 2 * MAP_PADDING)
+    usable_h = max(100, MAP_HEIGHT - 2 * MAP_PADDING)
+    zoom_x = math.log2(usable_w / (TILE_SIZE * span_x))
+    zoom_y = math.log2(usable_h / (TILE_SIZE * span_y))
+    zoom = max(0.0, min(20.0, min(zoom_x, zoom_y)))
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
+    center_lon, center_lat = _lonlat_from_mercator(center_x, center_y)
+    return center_lon, center_lat, zoom, center_x, center_y
+
+
+def _mapbox_base_url(center_lon: float, center_lat: float, zoom: float):
+    token = os.getenv("MAPBOX_TOKEN")
+    if not token:
         raise HTTPException(status_code=503, detail="Map imagery is not configured")
     style = os.getenv("MAPBOX_STYLE", "mapbox/satellite-v9").strip("/")
     parts = style.split("/", 1)
     username, style_id = parts if len(parts) == 2 else ("mapbox", "satellite-v9")
-    simplified = _simplify_for_static_map(geometry, mapbox_key, username, style_id)
-    return _url_for_feature(_feature(simplified), mapbox_key, username, style_id)
+    return (
+        f"https://api.mapbox.com/styles/v1/{username}/{style_id}/static/"
+        f"{center_lon:.7f},{center_lat:.7f},{zoom:.3f},0/"
+        f"{MAP_WIDTH}x{MAP_HEIGHT}@2x?logo=true&attribution=true&access_token={token}"
+    )
+
+
+def _screen_point(lon: float, lat: float, center_x: float, center_y: float, zoom: float):
+    x, y = _mercator_xy(lon, lat)
+    world = TILE_SIZE * (2 ** zoom) * MAP_SCALE
+    px = (x - center_x) * world + (MAP_WIDTH * MAP_SCALE) / 2
+    py = (y - center_y) * world + (MAP_HEIGHT * MAP_SCALE) / 2
+    return (px, py)
+
+
+def _rings(geom):
+    polys = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
+    for poly in polys:
+        yield list(poly.exterior.coords), [list(r.coords) for r in poly.interiors]
+
+
+def _render_field_map(geom):
+    center_lon, center_lat, zoom, center_x, center_y = _camera_for_geometry(geom)
+    url = _mapbox_base_url(center_lon, center_lat, zoom)
+    try:
+        response = httpx.get(url, timeout=25.0, follow_redirects=True)
+    except httpx.HTTPError as exc:
+        logger.warning("Mapbox request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Map image provider unavailable") from exc
+    if response.status_code != 200:
+        logger.warning("Mapbox returned %s: %s", response.status_code, response.text[:500])
+        raise HTTPException(status_code=502, detail="Map image provider returned an error")
+
+    try:
+        image = Image.open(io.BytesIO(response.content)).convert("RGBA")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Map image provider returned invalid imagery") from exc
+
+    if image.size != (MAP_WIDTH * MAP_SCALE, MAP_HEIGHT * MAP_SCALE):
+        image = image.resize((MAP_WIDTH * MAP_SCALE, MAP_HEIGHT * MAP_SCALE), Image.Resampling.LANCZOS)
+
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay, "RGBA")
+    fill = (47, 160, 90, 58)
+    outline_shadow = (255, 255, 255, 245)
+    outline = (20, 107, 57, 255)
+
+    for exterior, holes in _rings(geom):
+        ext = [_screen_point(lon, lat, center_x, center_y, zoom) for lon, lat in exterior]
+        if len(ext) >= 3:
+            draw.polygon(ext, fill=fill)
+            draw.line(ext, fill=outline_shadow, width=10, joint="curve")
+            draw.line(ext, fill=outline, width=6, joint="curve")
+        for hole in holes:
+            pts = [_screen_point(lon, lat, center_x, center_y, zoom) for lon, lat in hole]
+            if len(pts) >= 3:
+                draw.polygon(pts, fill=(0, 0, 0, 0))
+                draw.line(pts, fill=outline_shadow, width=8, joint="curve")
+                draw.line(pts, fill=outline, width=4, joint="curve")
+
+    image = Image.alpha_composite(image, overlay).convert("RGB")
+    out = io.BytesIO()
+    image.save(out, format="JPEG", quality=91, optimize=True)
+    return out.getvalue()
 
 
 @router.get("/api/public/proposals/{public_token}/fields/{field_id}/map-image")
 def public_field_map_image(public_token: str, field_id: int):
-    url = _static_image_url(_field_boundary(public_token, field_id))
-    try:
-        response = httpx.get(url, timeout=25.0, follow_redirects=True)
-    except httpx.HTTPError as exc:
-        logger.warning("Mapbox request failed for field %s: %s", field_id, exc)
-        raise HTTPException(status_code=502, detail="Map image provider unavailable") from exc
-    if response.status_code != 200:
-        logger.warning(
-            "Mapbox returned %s for field %s (url chars=%s): %s",
-            response.status_code,
-            field_id,
-            len(url),
-            response.text[:500],
-        )
-        raise HTTPException(status_code=502, detail="Map image provider returned an error")
-    media_type = response.headers.get("content-type", "image/png").split(";", 1)[0]
+    geom = _field_boundary(public_token, field_id)
+    content = _render_field_map(geom)
     return Response(
-        content=response.content,
-        media_type=media_type,
+        content=content,
+        media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"},
     )

@@ -4,5 +4,9 @@
     "app.py": {
       "maxDuration": 60
     }
-  }
+  },
+  "rewrites": [
+    {"source": "/farmer-proposal.html", "destination": "/api/farmer-proposal-page"},
+    {"source": "/farmer-proposal", "destination": "/api/farmer-proposal-page"}
+  ]
 }

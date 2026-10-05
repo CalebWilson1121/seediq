@@ -72,39 +72,47 @@ def _insert_id(conn, sql: str, params: tuple) -> int:
 
 
 def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> int | None:
-    """APH or MBAR can be the first document that creates a prospect.
+    """APH, MBAR, or mapped SOI can create/enrich a SeedIQ prospect.
 
-    First document wins for identity/source. Later documents enrich the same farm/prospect.
-    MBAR is treated as the permanent field/geography layer; APH is the production-history layer.
+    APH contributes production history. MBAR and mapped SOI contribute permanent field identity/geography.
+    Mapped SOI insurance values are intentionally not normalized into SeedIQ.
     """
     doc_type = (parsed.document_type or "").upper()
-    if doc_type not in {"APH", "MBAR"}:
+    if doc_type not in {"APH", "MBAR", "SOI"}:
         row = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (farm_id,)).fetchone()
         return int(row["id"]) if row else None
 
     prospect_name = (parsed.producer_name or parsed.farm_name or "Imported Prospect").strip()
     total_acres = round(sum(float(f.acres or 0) for f in parsed.fields), 2)
     crops = sorted({str(f.crop).strip() for f in parsed.fields if f.crop}) if doc_type == "APH" else []
-    metadata = {
-        "last_document_type": doc_type,
-        "has_aph": doc_type == "APH",
-        "has_mbar": doc_type == "MBAR",
-    }
+
+    metadata: dict[str, Any] = {"last_document_type": doc_type}
     if doc_type == "APH":
         metadata.update({
+            "has_aph": True,
             "carrier": "NAU Country" if any((f.metadata or {}).get("carrier") == "NAU Country" for f in parsed.fields) else None,
             "unit_count": len(parsed.fields),
             "aph_year_rows": len(parsed.crop_records),
             "policy_number": parsed.policy_number,
             "location_ready_units": sum(1 for f in parsed.fields if (f.metadata or {}).get("township_range") and (f.metadata or {}).get("section")),
         })
-    else:
+        source = "aph_upload"
+    elif doc_type == "MBAR":
         metadata.update({
+            "has_mbar": True,
             "mbar_field_count": len(parsed.fields),
             "mbar_geometry_count": sum(1 for f in parsed.fields if (f.metadata or {}).get("boundary_geojson")),
         })
+        source = "mbar_upload"
+    else:
+        metadata.update({
+            "has_mapped_soi": True,
+            "mapped_soi_field_count": len(parsed.fields),
+            "mapped_soi_geometry_count": sum(1 for f in parsed.fields if (f.metadata or {}).get("boundary_geojson")),
+            "insurance_data_scrubbed": True,
+        })
+        source = "mapped_soi_upload"
 
-    source = "aph_upload" if doc_type == "APH" else "mbar_upload"
     conn.execute(
         "INSERT INTO prospects(farm_id,source_document_id,prospect_name,status,source,total_acres,crops_json,metadata_json) "
         "VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb) "
@@ -163,7 +171,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
         document_id = _insert_id(conn, "INSERT INTO documents(farm_id,original_name,stored_path,sha256,mime_type,document_type,status,parser_name,parser_version,warnings_json,raw_preview,parsed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)", (farm_id, original_name, stored_path, sha, mimetypes.guess_type(original_name)[0], parsed.document_type, "parsed", parser_name, PARSER_VERSION, json_dumps(parsed.warnings), parsed.raw_preview))
 
         field_id_by_key: dict[str, int] = {}
-        mbar_boundaries: list[tuple[int, dict]] = []
+        field_boundaries: list[tuple[int, dict]] = []
         for i, f in enumerate(parsed.fields):
             key_parts = [str(x or "") for x in [f.farm_number, f.tract_number, f.field_number]]
             local_key = "|".join(x for x in key_parts if x) or f.name or f"field-{i+1}"
@@ -178,8 +186,8 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             field_id_by_key[local_key] = field_id
             if f.field_number:
                 field_id_by_key[str(f.field_number)] = field_id
-            if parsed.document_type == "MBAR" and (f.metadata or {}).get("boundary_geojson"):
-                mbar_boundaries.append((field_id, f.metadata["boundary_geojson"]))
+            if parsed.document_type in {"MBAR", "SOI"} and (f.metadata or {}).get("boundary_geojson"):
+                field_boundaries.append((field_id, f.metadata["boundary_geojson"]))
 
         for r in parsed.crop_records:
             field_id = field_id_by_key.get(r.field_key)
@@ -191,9 +199,9 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
 
         prospect_id = _upsert_prospect(conn, farm_id, document_id, parsed)
 
-    if parsed.document_type == "MBAR" and mbar_boundaries:
+    if parsed.document_type in {"MBAR", "SOI"} and field_boundaries:
         from soil_service import set_exact_boundary
-        for field_id, boundary in mbar_boundaries:
+        for field_id, boundary in field_boundaries:
             try:
                 set_exact_boundary(field_id, boundary)
             except Exception as exc:

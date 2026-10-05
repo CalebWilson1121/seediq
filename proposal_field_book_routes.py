@@ -38,7 +38,7 @@ def _build_field_book_data(token: str):
         rows = conn.execute(
             "SELECT f.id AS field_id,f.name AS field_name,f.acres,f.irrigation,"
             "cp.crop,cp.yield_goal,cp.target_population,cp.seed_price_per_unit,cp.seeds_per_unit,"
-            "cp.units_required,cp.seed_cost_per_acre,cp.total_seed_cost,cp.selected_seed_product_id,"
+            "cp.units_required,cp.seed_cost_per_acre,cp.total_seed_cost,cp.pricing_source,cp.selected_seed_product_id,"
             "sp.product_name,sp.brand,sp.trait_package,sp.relative_maturity,sp.placement_text,sp.metadata_json,"
             "fl.boundary_geojson,fl.centroid_lat,fl.centroid_lon,fl.township_range,fl.section,"
             "fs.dominant_muname,fs.dominant_musym,fs.weighted_aws150_cm,fs.weighted_slope_pct,"
@@ -89,6 +89,7 @@ def _build_field_book_data(token: str):
             "units_required": row.get("units_required"),
             "seed_cost_per_acre": row.get("seed_cost_per_acre"),
             "total_seed_cost": row.get("total_seed_cost"),
+            "pricing_source": row.get("pricing_source"),
             "product_name": row.get("product_name"),
             "brand": row.get("brand"),
             "trait_package": row.get("trait_package"),
@@ -121,6 +122,7 @@ def _build_field_book_data(token: str):
         "fields": fields,
         "field_count": len(fields),
         "planned_acres": round(sum(float(x.get("acres") or 0) for x in fields), 2),
+        "estimated_seed_value": round(sum(float(x.get("total_seed_cost") or 0) for x in fields), 2),
         "method": "SeedIQ deterministic field fit using crop, IRR/NIRR, SSURGO soil attributes, yield goal and published product positioning.",
         "population_note": "Planting populations are SeedIQ planning recommendations and should be confirmed by the dealer/agronomist for local conditions.",
     }

@@ -36,8 +36,10 @@ def _float(value: Any) -> float | None:
 
 
 def _ks_trs(township_range: str, section: str | int) -> str:
-    # NAU prints 001S-016E; Kansas PLSS service stores compact 8-char TRS such as 01S16E34.
-    m = re.match(r"0*(\d{1,3})([NS])-0*(\d{1,3})([EW])", (township_range or "").upper().strip())
+    # NAU commonly prints either 001S-016E or compact 001S016E.
+    # Kansas PLSS service stores compact 8-char TRS such as 01S16E34.
+    raw = (township_range or "").upper().strip().replace(" ", "")
+    m = re.match(r"^0*(\d{1,3})([NS])-?0*(\d{1,3})([EW])$", raw)
     if not m:
         raise ValueError(f"Unsupported township/range format: {township_range}")
     sec = int(str(section).strip())
@@ -220,50 +222,69 @@ def set_exact_boundary(field_id: int, boundary_geojson: dict[str, Any]) -> dict[
         "centroid_lat": c.y,
         "centroid_lon": c.x,
         "confidence": 1.0,
-        "notes": "Exact field boundary supplied by user or source system.",
+        "notes": "Exact field boundary supplied from MBAR/Mapped SOI/manual import.",
     }
     return _save_location(field_id, loc)
 
 
-def _save_soils(field_id: int, location_id: int, boundary_source: str, soil: dict[str, Any]) -> dict[str, Any]:
+def save_section_location(field_id: int, township_range: str, section: str | int, fsa_farm_number=None) -> dict[str, Any]:
+    loc = resolve_kansas_plss(township_range, section)
+    return _save_location(field_id, loc, township_range, section, fsa_farm_number)
+
+
+def _field_location(field_id: int):
     with connect() as conn:
-        conn.execute(
-            "INSERT INTO field_soils(field_id,location_id,source,status,boundary_source,total_area_acres,dominant_mukey,dominant_musym,dominant_muname,weighted_aws025_cm,weighted_aws050_cm,weighted_aws100_cm,weighted_aws150_cm,weighted_slope_pct,drainage_summary,hydrologic_group_summary,mapunits_json,raw_response_json) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,?::jsonb,?::jsonb) "
-            "ON CONFLICT(field_id) DO UPDATE SET location_id=excluded.location_id,source=excluded.source,status=excluded.status,boundary_source=excluded.boundary_source,total_area_acres=excluded.total_area_acres,dominant_mukey=excluded.dominant_mukey,dominant_musym=excluded.dominant_musym,dominant_muname=excluded.dominant_muname,weighted_aws025_cm=excluded.weighted_aws025_cm,weighted_aws050_cm=excluded.weighted_aws050_cm,weighted_aws100_cm=excluded.weighted_aws100_cm,weighted_aws150_cm=excluded.weighted_aws150_cm,weighted_slope_pct=excluded.weighted_slope_pct,drainage_summary=excluded.drainage_summary,hydrologic_group_summary=excluded.hydrologic_group_summary,mapunits_json=excluded.mapunits_json,raw_response_json=excluded.raw_response_json,enriched_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP",
-            (field_id, location_id, soil["source"], "ready", boundary_source, soil.get("total_area_acres"), soil.get("dominant_mukey"), soil.get("dominant_musym"), soil.get("dominant_muname"), soil.get("weighted_aws025_cm"), soil.get("weighted_aws050_cm"), soil.get("weighted_aws100_cm"), soil.get("weighted_aws150_cm"), soil.get("weighted_slope_pct"), json_dumps(soil.get("drainage_summary", {})), json_dumps(soil.get("hydrologic_group_summary", {})), json_dumps(soil.get("mapunits", [])), json_dumps(soil)),
-        )
-        row = conn.execute("SELECT * FROM field_soils WHERE field_id=?", (field_id,)).fetchone()
-        return dict(row)
+        return conn.execute("SELECT * FROM field_locations WHERE field_id=?", (field_id,)).fetchone()
+
+
+def _field_row(field_id: int):
+    with connect() as conn:
+        return conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
+
+
+def _ensure_location(field_id: int) -> dict[str, Any]:
+    location = _field_location(field_id)
+    if location:
+        return dict(location)
+    field = _field_row(field_id)
+    if not field:
+        raise KeyError(f"Field {field_id} not found")
+    metadata = _loads(field["metadata_json"], {})
+    boundary = metadata.get("boundary_geojson")
+    if boundary:
+        return set_exact_boundary(field_id, boundary)
+    township_range = metadata.get("township_range")
+    section = metadata.get("section")
+    if township_range and section:
+        return save_section_location(field_id, township_range, section, field.get("farm_number"))
+    raise LookupError("No usable field boundary or township/range/section location is available for this field")
+
+
+def _soil_payload(row) -> dict[str, Any]:
+    d = dict(row)
+    d["mapunits"] = _loads(d.pop("mapunits_json", None), [])
+    d["drainage_summary"] = _loads(d.pop("drainage_summary_json", None), {})
+    d["hydrologic_group_summary"] = _loads(d.pop("hydrologic_group_summary_json", None), {})
+    return d
 
 
 def enrich_field(field_id: int, force: bool = False) -> dict[str, Any]:
     with connect() as conn:
-        field = conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
-        if not field:
-            raise KeyError(f"Field {field_id} not found")
-        existing = conn.execute("SELECT * FROM field_soils WHERE field_id=?", (field_id,)).fetchone()
-        location = conn.execute("SELECT * FROM field_locations WHERE field_id=?", (field_id,)).fetchone()
-    if existing and not force:
-        return {"field_id": field_id, "cached": True, "soil": dict(existing)}
-
-    meta = _loads(field["metadata_json"], {})
-    if location:
-        loc = dict(location)
-        boundary = _loads(loc.get("boundary_geojson"), None)
-    else:
-        twp = meta.get("township_range")
-        sec = meta.get("section")
-        if not twp or not sec:
-            return {"field_id": field_id, "status": "needs_boundary", "message": "No exact boundary or APH township/range/section is available."}
-        if (field["state"] or "KS").upper() != "KS":
-            return {"field_id": field_id, "status": "needs_boundary", "message": "Automatic PLSS resolution is currently enabled for Kansas; provide an exact GeoJSON boundary for other states."}
-        resolved = resolve_kansas_plss(twp, sec)
-        loc = _save_location(field_id, resolved, twp, sec, meta.get("fsa_farm_number"))
-        boundary = _loads(loc.get("boundary_geojson"), resolved["boundary_geojson"])
+        if not force:
+            existing = conn.execute("SELECT * FROM field_soils WHERE field_id=?", (field_id,)).fetchone()
+            if existing:
+                return _soil_payload(existing)
+    location = _ensure_location(field_id)
+    boundary = _loads(location.get("boundary_geojson"), {})
     soil = fetch_ssurgo(boundary)
-    saved = _save_soils(field_id, int(loc["id"]), loc["source"], soil)
-    return {"field_id": field_id, "cached": False, "location": loc, "soil": saved}
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO field_soils(field_id,source,total_area_acres,dominant_mukey,dominant_musym,dominant_muname,weighted_aws025_cm,weighted_aws050_cm,weighted_aws100_cm,weighted_aws150_cm,weighted_slope_pct,drainage_summary_json,hydrologic_group_summary_json,mapunits_json,status,enriched_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,'ready',CURRENT_TIMESTAMP) "
+            "ON CONFLICT(field_id) DO UPDATE SET source=excluded.source,total_area_acres=excluded.total_area_acres,dominant_mukey=excluded.dominant_mukey,dominant_musym=excluded.dominant_musym,dominant_muname=excluded.dominant_muname,weighted_aws025_cm=excluded.weighted_aws025_cm,weighted_aws050_cm=excluded.weighted_aws050_cm,weighted_aws100_cm=excluded.weighted_aws100_cm,weighted_aws150_cm=excluded.weighted_aws150_cm,weighted_slope_pct=excluded.weighted_slope_pct,drainage_summary_json=excluded.drainage_summary_json,hydrologic_group_summary_json=excluded.hydrologic_group_summary_json,mapunits_json=excluded.mapunits_json,status='ready',enriched_at=CURRENT_TIMESTAMP",
+            (field_id, soil["source"], soil["total_area_acres"], soil["dominant_mukey"], soil["dominant_musym"], soil["dominant_muname"], soil["weighted_aws025_cm"], soil["weighted_aws050_cm"], soil["weighted_aws100_cm"], soil["weighted_aws150_cm"], soil["weighted_slope_pct"], json_dumps(soil["drainage_summary"]), json_dumps(soil["hydrologic_group_summary"]), json_dumps(soil["mapunits"])),
+        )
+    return soil
 
 
 def enrich_prospect(prospect_id: int, force: bool = False) -> dict[str, Any]:
@@ -271,25 +292,14 @@ def enrich_prospect(prospect_id: int, force: bool = False) -> dict[str, Any]:
         prospect = conn.execute("SELECT * FROM prospects WHERE id=?", (prospect_id,)).fetchone()
         if not prospect:
             raise KeyError(f"Prospect {prospect_id} not found")
-        fields = conn.execute("SELECT id,name,crop,practice,metadata_json FROM fields WHERE farm_id=? ORDER BY id", (prospect["farm_id"],)).fetchall()
+        fields = conn.execute("SELECT id FROM fields WHERE farm_id=? ORDER BY id", (prospect["farm_id"],)).fetchall()
     results = []
     for field in fields:
         try:
-            r = enrich_field(int(field["id"]), force=force)
+            results.append({"field_id": field["id"], "status": "ready", "soil": enrich_field(field["id"], force=force)})
         except Exception as exc:
-            r = {"field_id": int(field["id"]), "status": "error", "message": str(exc)}
-        r["name"] = field["name"]
-        r["crop"] = field["crop"]
-        r["practice"] = field["practice"]
-        results.append(r)
-    return {
-        "prospect_id": prospect_id,
-        "fields_total": len(results),
-        "soil_ready": sum(1 for r in results if r.get("soil")),
-        "needs_boundary": sum(1 for r in results if r.get("status") == "needs_boundary"),
-        "errors": sum(1 for r in results if r.get("status") == "error"),
-        "results": results,
-    }
+            results.append({"field_id": field["id"], "status": "error", "error": str(exc)})
+    return {"prospect_id": prospect_id, "fields": results}
 
 
 def prospect_soil_status(prospect_id: int) -> dict[str, Any]:
@@ -297,18 +307,9 @@ def prospect_soil_status(prospect_id: int) -> dict[str, Any]:
         prospect = conn.execute("SELECT * FROM prospects WHERE id=?", (prospect_id,)).fetchone()
         if not prospect:
             raise KeyError(f"Prospect {prospect_id} not found")
-        rows = conn.execute(
-            "SELECT f.id as field_id,f.name,f.crop,f.practice,f.acres,f.metadata_json,fl.source as location_source,fl.source_reference,fl.boundary_geojson,fl.centroid_lat,fl.centroid_lon,fl.confidence,fs.status as soil_status,fs.total_area_acres,fs.dominant_musym,fs.dominant_muname,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary,fs.hydrologic_group_summary,fs.mapunits_json "
-            "FROM fields f LEFT JOIN field_locations fl ON fl.field_id=f.id LEFT JOIN field_soils fs ON fs.field_id=f.id WHERE f.farm_id=? ORDER BY f.crop,f.name",
-            (prospect["farm_id"],),
-        ).fetchall()
-    out = []
-    for row in rows:
-        d = dict(row)
-        d["metadata"] = _loads(d.pop("metadata_json", None), {})
-        d["boundary_geojson"] = _loads(d.get("boundary_geojson"), None)
-        d["drainage_summary"] = _loads(d.get("drainage_summary"), {})
-        d["hydrologic_group_summary"] = _loads(d.get("hydrologic_group_summary"), {})
-        d["mapunits"] = _loads(d.pop("mapunits_json", None), [])
-        out.append(d)
-    return {"prospect_id": prospect_id, "fields": out}
+        rows = conn.execute("SELECT f.id AS field_id,f.name,f.acres,f.county,f.state,f.farm_number,f.tract_number,f.field_number,fl.source AS location_source,fl.source_reference,fl.township_range,fl.section,fl.boundary_geojson,fl.centroid_lat,fl.centroid_lon,fl.confidence,fs.status AS soil_status,fs.total_area_acres,fs.dominant_musym,fs.dominant_muname,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fs.hydrologic_group_summary_json FROM fields f LEFT JOIN field_locations fl ON fl.field_id=f.id LEFT JOIN field_soils fs ON fs.field_id=f.id WHERE f.farm_id=? ORDER BY f.name", (prospect["farm_id"],)).fetchall()
+    result = rows_to_dicts(rows)
+    for row in result:
+        for key in ("boundary_geojson","drainage_summary_json","hydrologic_group_summary_json"):
+            row[key] = _loads(row.get(key), {} if key != "boundary_geojson" else None)
+    return {"prospect_id": prospect_id, "farm_id": int(prospect["farm_id"]), "fields": result}

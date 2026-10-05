@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import secrets
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from database import connect, row_to_dict, rows_to_dicts
 
 router = APIRouter()
+BASE = Path(__file__).parent
 
 
 class ProposalCreateRequest(BaseModel):
@@ -99,6 +102,11 @@ def _full_proposal(row: dict[str, Any]) -> dict[str, Any]:
         ).fetchone()
     base = row_to_dict(p) or {}
     return {**row, **base, "summary": _proposal_summary(int(row["farm_id"]), int(row["crop_year"]))}
+
+
+@router.api_route("/farmer-proposal.html", methods=["GET", "HEAD"])
+def farmer_proposal_page():
+    return FileResponse(BASE / "farmer-proposal.html")
 
 
 @router.post("/api/prospects/{prospect_id}/proposals")

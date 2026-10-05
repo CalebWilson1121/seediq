@@ -44,12 +44,17 @@ def sign_large_upload(req: SignedUploadRequest, request: Request):
 def process_large_upload(req: ProcessUploadRequest, request: Request):
     _require_dealer(request)
     try:
+        # During parser development, re-uploading the same mapped SOI must rebuild
+        # normalized fields/geometry rather than short-circuiting as a duplicate.
+        # Auto-detect uploads often arrive with document_type=None, so the filename
+        # is also used to recognize the mapped SOI source.
+        is_soi = (req.document_type or "").upper() == "SOI" or "SOI" in req.original_name.upper()
         return ingest_signed_upload(
             req.object_path,
             req.original_name,
             req.document_type,
             target_farm_id=req.target_farm_id,
-            reprocess=req.reprocess,
+            reprocess=(req.reprocess or is_soi),
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"The uploaded document could not be imported: {str(exc)[:220]}") from exc

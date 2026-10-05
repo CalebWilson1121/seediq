@@ -50,10 +50,32 @@ def _store_source_document(temp_path: Path, original_name: str, sha: str) -> str
         base = os.environ["SUPABASE_URL"].rstrip("/")
         key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")
         url = f"{base}/storage/v1/object/seediq-documents/{quote(object_path, safe='/')}"
-        headers = {"Authorization": f"Bearer {key}", "apikey": key, "Content-Type": mimetypes.guess_type(original_name)[0] or "application/octet-stream", "x-upsert": "false"}
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "apikey": key,
+            "Content-Type": mimetypes.guess_type(original_name)[0] or "application/octet-stream",
+            "x-upsert": "false",
+        }
         with temp_path.open("rb") as handle:
             response = httpx.post(url, headers=headers, content=handle.read(), timeout=60)
-        if response.status_code not in (200, 201) and response.status_code != 409:
+
+        # Supabase Storage may report an existing object as HTTP 400 while the
+        # JSON payload carries code/statusCode 409 and "Duplicate". During a
+        # parser reprocess that is expected: the immutable source PDF is already
+        # safely stored at this SHA-derived path, so reuse it instead of failing.
+        duplicate = response.status_code == 409
+        if response.status_code == 400:
+            try:
+                payload = response.json()
+                duplicate = (
+                    str(payload.get("statusCode") or payload.get("code") or "") == "409"
+                    or str(payload.get("error") or "").lower() == "duplicate"
+                    or "already exists" in str(payload.get("message") or "").lower()
+                )
+            except Exception:
+                duplicate = "already exists" in response.text.lower() or '"duplicate"' in response.text.lower()
+
+        if response.status_code not in (200, 201) and not duplicate:
             raise RuntimeError(f"Supabase Storage upload failed ({response.status_code}): {response.text[:300]}")
         return f"supabase://seediq-documents/{object_path}"
     UPLOAD_DIR.mkdir(exist_ok=True)

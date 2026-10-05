@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -9,6 +10,7 @@ from database import connect, row_to_dict, rows_to_dicts
 from channel_fit_routes import _fit_score, _loads
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _boundary(value: Any):
@@ -22,8 +24,7 @@ def _boundary(value: Any):
     return None
 
 
-@router.get("/api/public/proposals/{token}/field-book-data")
-def public_field_book_data(token: str):
+def _build_field_book_data(token: str):
     with connect() as conn:
         proposal_row = conn.execute(
             "SELECT sp.*,p.prospect_name,f.farm_name,f.producer_name "
@@ -55,8 +56,15 @@ def public_field_book_data(token: str):
     for row in rows_to_dicts(rows):
         crop = (row.get("crop") or "").upper()
         drainage = _loads(row.get("drainage_summary_json"), {})
+        if not isinstance(drainage, dict):
+            drainage = {}
         meta = _loads(row.get("metadata_json"), {})
-        tags = {str(x).lower() for x in meta.get("tags", [])}
+        if not isinstance(meta, dict):
+            meta = {}
+        raw_tags = meta.get("tags", [])
+        if not isinstance(raw_tags, (list, tuple, set)):
+            raw_tags = []
+        tags = {str(x).lower() for x in raw_tags}
         fit_score, reasons = _fit_score(
             crop,
             row.get("irrigation"),
@@ -65,6 +73,9 @@ def public_field_book_data(token: str):
             row.get("yield_goal"),
             tags,
         )
+        hydro = _loads(row.get("hydrologic_group_summary_json"), {})
+        if not isinstance(hydro, dict):
+            hydro = {}
         fields.append({
             "field_id": row.get("field_id"),
             "field_name": row.get("field_name"),
@@ -95,7 +106,7 @@ def public_field_book_data(token: str):
             "awc_0_150cm": row.get("weighted_aws150_cm"),
             "slope_pct": row.get("weighted_slope_pct"),
             "drainage": drainage,
-            "hydrologic_group": _loads(row.get("hydrologic_group_summary_json"), {}),
+            "hydrologic_group": hydro,
         })
 
     return {
@@ -113,3 +124,14 @@ def public_field_book_data(token: str):
         "method": "SeedIQ deterministic field fit using crop, IRR/NIRR, SSURGO soil attributes, yield goal and published product positioning.",
         "population_note": "Planting populations are SeedIQ planning recommendations and should be confirmed by the dealer/agronomist for local conditions.",
     }
+
+
+@router.get("/api/public/proposals/{token}/field-book-data")
+def public_field_book_data(token: str):
+    try:
+        return _build_field_book_data(token)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("field-book-data failed")
+        raise HTTPException(status_code=500, detail="Unable to build field book")

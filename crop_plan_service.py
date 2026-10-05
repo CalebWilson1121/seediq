@@ -23,7 +23,9 @@ def list_field_plans(farm_id: int, crop_year: int) -> list[dict[str, Any]]:
         rows = conn.execute(
             "SELECT f.id AS field_id,f.name,f.acres,f.county,f.state,f.farm_number,f.tract_number,f.field_number,"
             "f.practice,f.irrigation,f.metadata_json,cp.id AS crop_plan_id,cp.crop_year,cp.crop,cp.source,cp.rotation_mode,"
-            "cp.selected_seed_product_id,cp.target_population,cp.notes,cp.status,sp.product_name AS selected_seed_name "
+            "cp.selected_seed_product_id,cp.yield_goal,cp.target_population,cp.seed_price_per_unit,cp.seeds_per_unit,"
+            "cp.units_required,cp.seed_cost_per_acre,cp.total_seed_cost,cp.pricing_source,cp.notes,cp.status,"
+            "sp.product_name AS selected_seed_name,sp.brand AS selected_seed_brand,sp.trait_package AS selected_trait_package "
             "FROM fields f LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? "
             "LEFT JOIN seed_products sp ON sp.id=cp.selected_seed_product_id "
             "WHERE f.farm_id=? ORDER BY f.name,f.id",

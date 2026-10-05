@@ -7,11 +7,13 @@ from large_upload_routes import router as large_upload_router
 from seed_planning_routes import router as seed_planning_router
 from channel_fit_routes import router as channel_fit_router
 from proposal_routes import router as proposal_router
+from proposal_field_book_routes import router as proposal_field_book_router
 
 app.include_router(large_upload_router)
 app.include_router(seed_planning_router)
 app.include_router(channel_fit_router)
 app.include_router(proposal_router)
+app.include_router(proposal_field_book_router)
 
 # server.py has a generic /{page_name}.html route. Keep the farmer share page
 # ahead of that catch-all so public proposal links resolve instead of returning 404.

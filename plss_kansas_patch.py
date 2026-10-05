@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -7,28 +8,42 @@ from shapely.geometry import mapping, shape
 
 import soil_service
 
-# Kansas bounding box in WGS84. This is intentionally a little generous so
-# border sections are not rejected, while Alaska and other PLSS duplicates are.
+# Kansas Geological Survey section data, published as a Kansas-only ArcGIS layer.
+# Using a Kansas-only source avoids the nationally duplicated township/range
+# identifiers that previously sent mapped SOI fields to Alaska.
+_KS_SECTION_URL = (
+    "https://services2.arcgis.com/ZOdjAzAQ2B0f85zi/ArcGIS/rest/services/"
+    "PLSS_Section_Township_Range/FeatureServer/1/query"
+)
 _KS_WEST = -102.2
 _KS_SOUTH = 36.9
 _KS_EAST = -94.5
 _KS_NORTH = 40.1
 
 
+def _srt_key(township_range: str, section: str | int) -> str:
+    raw = (township_range or "").upper().strip().replace(" ", "")
+    match = re.match(r"^0*(\d{1,3})([NS])-?0*(\d{1,3})([EW])$", raw)
+    if not match:
+        raise ValueError(f"Unsupported township/range format: {township_range}")
+    township = int(match.group(1))
+    township_dir = match.group(2)
+    range_no = int(match.group(3))
+    range_dir = match.group(4)
+    sec = int(str(section).strip())
+    return f"S{sec}-T{township}{township_dir}-R{range_no}{range_dir}"
+
+
 def resolve_kansas_plss(township_range: str, section: str | int) -> dict[str, Any]:
-    trs = soil_service._ks_trs(township_range, section)
+    srt = _srt_key(township_range, section)
     params = {
-        "where": f"PLSS_TYPE='Section' AND PLSS_TRS='{trs}'",
-        "outFields": "PLSS_TRS,PLSS_TYPE",
+        "where": f"S_R_T='{srt}'",
+        "outFields": "S_R_T,TOWNSHIP,RANGE",
         "returnGeometry": "true",
         "outSR": "4326",
-        "geometry": f"{_KS_WEST},{_KS_SOUTH},{_KS_EAST},{_KS_NORTH}",
-        "geometryType": "esriGeometryEnvelope",
-        "inSR": "4326",
-        "spatialRel": "esriSpatialRelIntersects",
         "f": "geojson",
     }
-    response = httpx.get(soil_service.KS_PLSS_URL, params=params, timeout=30)
+    response = httpx.get(_KS_SECTION_URL, params=params, timeout=30)
     response.raise_for_status()
     data = response.json() or {}
     features = data.get("features") or []
@@ -43,18 +58,17 @@ def resolve_kansas_plss(township_range: str, section: str | int) -> dict[str, An
         centroid = candidate.centroid
         if _KS_WEST <= centroid.x <= _KS_EAST and _KS_SOUTH <= centroid.y <= _KS_NORTH:
             return {
-                "source": "Kansas PLSS / KGS ArcGIS",
-                "source_reference": trs,
+                "source": "Kansas Geological Survey PLSS sections",
+                "source_reference": srt,
                 "boundary_geojson": mapping(candidate),
                 "centroid_lat": centroid.y,
                 "centroid_lon": centroid.x,
-                "confidence": 0.75,
-                "notes": "Kansas-constrained PLSS section used to georeference a mapped field.",
+                "confidence": 0.90,
+                "notes": "Kansas-only KGS PLSS section used to georeference a mapped field.",
             }
 
-    raise LookupError(f"Kansas PLSS section not found inside Kansas for {trs}")
+    raise LookupError(f"Kansas PLSS section not found for {srt}")
 
 
-# Patch the function on the actual module object before the application imports
-# any parser code. The NAU mapped-SOI parser imports this function at parse time.
+# Patch the shared resolver before application/parser imports.
 soil_service.resolve_kansas_plss = resolve_kansas_plss

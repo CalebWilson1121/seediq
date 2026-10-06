@@ -48,6 +48,33 @@ def _field_root(name: Any) -> str:
     return re.sub(r"\s+", " ", s).strip() or str(name or "").strip().lower()
 
 
+def _name_tokens(value: Any) -> set[str]:
+    s = _field_root(value)
+    stop = {"farm", "farms", "place", "field", "the"}
+    return {x for x in s.split() if x and x not in stop}
+
+
+def _name_similarity(a: Any, b: Any) -> float:
+    aa, bb = _name_tokens(a), _name_tokens(b)
+    if not aa or not bb:
+        return 0.0
+    if aa == bb:
+        return 1.0
+    if aa <= bb or bb <= aa:
+        return 0.9
+    return len(aa & bb) / len(aa | bb)
+
+
+def _field_aliases(field: dict[str, Any]) -> list[str]:
+    md = _loads(field.get("metadata_json"), {})
+    aliases = md.get("aph_identity_aliases") or []
+    if not isinstance(aliases, list):
+        aliases = []
+    values = [str(field.get("name") or "").strip()]
+    values.extend(str(x).strip() for x in aliases if str(x).strip())
+    return list(dict.fromkeys(x for x in values if x))
+
+
 
 def _group_candidates(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build logical management-field groups from mapped polygons.
@@ -66,12 +93,17 @@ def _group_candidates(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for (practice, root), members in grouped.items():
         members = sorted(members, key=lambda x: str(x.get("name") or ""))
         total = round(sum(float(x.get("acres") or 0) for x in members), 2)
+        aliases = []
+        for member in members:
+            aliases.extend(_field_aliases(member))
+        aliases = list(dict.fromkeys(x for x in aliases if x))
         out.append({
             "practice": practice,
             "root": root,
             "field_ids": [int(x["id"]) for x in members],
             "field_names": [x.get("name") for x in members],
             "selected_acres": total,
+            "identity_aliases": aliases,
         })
     return out
 
@@ -83,7 +115,7 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
             (farm_id,),
         ).fetchall())
         fields = rows_to_dicts(conn.execute(
-            "SELECT id,name,acres,irrigation,practice,farm_number,tract_number,field_number "
+            "SELECT id,name,acres,irrigation,practice,farm_number,tract_number,field_number,metadata_json "
             "FROM fields WHERE farm_id=? ORDER BY name",
             (farm_id,),
         ).fetchall())
@@ -116,23 +148,40 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                 if abs_diff > max(12.0, target * 0.08):
                     continue
 
-                # Acreage is intentionally dominant.
+                aph_name = md.get("farm_name") or md.get("management_name") or ""
+                name_similarity = max(
+                    [_name_similarity(aph_name, alias) for alias in (g.get("identity_aliases") or [])] or [0.0]
+                )
+
+                # Acreage remains the strongest generic signal, but once a
+                # dealer confirms an identity alias we remember it. That lets
+                # next year's APH reconnect quickly even when insurance acres
+                # differ from the clean mapped acres.
                 if abs_diff <= 0.25:
-                    score = 100.0
+                    acreage_score = 100.0
                 elif abs_diff <= 0.75:
-                    score = 98.0
+                    acreage_score = 98.0
                 elif abs_diff <= 1.50:
-                    score = 95.0
+                    acreage_score = 95.0
                 elif pct <= 1.0:
-                    score = 93.0
+                    acreage_score = 93.0
                 elif pct <= 2.0:
-                    score = 88.0
+                    acreage_score = 88.0
                 elif pct <= 3.5:
-                    score = 80.0
+                    acreage_score = 80.0
                 elif pct <= 5.0:
-                    score = 70.0
+                    acreage_score = 70.0
                 else:
-                    score = 55.0
+                    acreage_score = 55.0
+
+                name_bonus = 0.0
+                if name_similarity >= 0.90:
+                    name_bonus = 18.0
+                elif name_similarity >= 0.60:
+                    name_bonus = 10.0
+                elif name_similarity >= 0.34:
+                    name_bonus = 4.0
+                score = min(100.0, acreage_score + name_bonus)
 
                 candidates.append({
                     "field_ids": g["field_ids"],
@@ -143,9 +192,16 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                     "variance_acres": diff,
                     "variance_pct": round(pct, 2),
                     "score": score,
+                    "acreage_score": acreage_score,
+                    "name_similarity": round(name_similarity, 3),
+                    "aph_management_name": aph_name or None,
+                    "identity_aliases": g.get("identity_aliases") or [],
                     "crop": crop,
                     "practice": practice,
-                    "reason": f"{g['root'] or 'field group'} totals {total:.2f} ac vs APH {target:.2f} ac",
+                    "reason": (
+                        f"{g['root'] or 'field group'} totals {total:.2f} ac vs APH {target:.2f} ac"
+                        + (f"; management-name match {round(name_similarity * 100)}%" if name_similarity > 0 else "")
+                    ),
                 })
 
         candidates.sort(key=lambda x: (-x["score"], abs(x["variance_acres"]), len(x["field_ids"]), x["field_root"]))
@@ -192,10 +248,16 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
         if chosen:
             abs_diff = abs(float(chosen["variance_acres"]))
             pct = float(chosen["variance_pct"])
-            # High confidence is intentionally strict: exact/near-exact acreage.
-            if abs_diff <= 1.0 or pct <= 0.75:
+            name_similarity = float(chosen.get("name_similarity") or 0)
+            # High confidence can come from nearly exact acreage, or from a
+            # remembered/strong management-name identity plus reasonable acres.
+            if abs_diff <= 1.0 or pct <= 0.75 or (
+                name_similarity >= 0.90 and (abs_diff <= 10.0 or pct <= 12.0)
+            ):
                 confidence = "high"
-            elif abs_diff <= 3.0 or pct <= 2.0:
+            elif abs_diff <= 3.0 or pct <= 2.0 or (
+                name_similarity >= 0.60 and (abs_diff <= 8.0 or pct <= 8.0)
+            ):
                 confidence = "medium"
             else:
                 confidence = "review"
@@ -506,6 +568,29 @@ def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
             if record_identity(rec) == target_identity:
                 conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
                 updated += 1
+
+        # Remember a dealer-confirmed management identity on the exact fields.
+        # This is intentionally field metadata rather than document-specific
+        # matching, so future APH uploads can reuse the relationship.
+        match_meta = _loads(match.get("metadata_json"), {})
+        identity_alias = str(
+            match_meta.get("farm_name") or match_meta.get("management_name") or ""
+        ).strip()
+        if identity_alias:
+            for fid in field_ids:
+                row = conn.execute("SELECT metadata_json FROM fields WHERE id=?", (fid,)).fetchone()
+                field_meta = _loads(row.get("metadata_json") if row else None, {})
+                aliases = field_meta.get("aph_identity_aliases") or []
+                if not isinstance(aliases, list):
+                    aliases = []
+                normalized = {str(x).strip().lower() for x in aliases if str(x).strip()}
+                if identity_alias.lower() not in normalized:
+                    aliases.append(identity_alias)
+                field_meta["aph_identity_aliases"] = aliases[-20:]
+                conn.execute(
+                    "UPDATE fields SET metadata_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (json_dumps(field_meta), fid),
+                )
 
     climate = enrich_climate_for_fields(field_ids)
     return {

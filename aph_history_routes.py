@@ -153,10 +153,9 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                     [_name_similarity(aph_name, alias) for alias in (g.get("identity_aliases") or [])] or [0.0]
                 )
 
-                # Acreage remains the strongest generic signal, but once a
-                # dealer confirms an identity alias we remember it. That lets
-                # next year's APH reconnect quickly even when insurance acres
-                # differ from the clean mapped acres.
+                # Acreage tells us whether a group is plausible; management
+                # identity tells us whether it is the right group. Exact acreage
+                # alone must never silently beat a differently named field.
                 if abs_diff <= 0.25:
                     acreage_score = 100.0
                 elif abs_diff <= 0.75:
@@ -174,14 +173,11 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                 else:
                     acreage_score = 55.0
 
-                name_bonus = 0.0
-                if name_similarity >= 0.90:
-                    name_bonus = 18.0
-                elif name_similarity >= 0.60:
-                    name_bonus = 10.0
-                elif name_similarity >= 0.34:
-                    name_bonus = 4.0
-                score = min(100.0, acreage_score + name_bonus)
+                generic_aph_name = _field_root(aph_name) in {"", "other ident", "other", "unknown", "nau unit"}
+                if generic_aph_name:
+                    score = acreage_score * 0.55
+                else:
+                    score = (name_similarity * 70.0) + (acreage_score * 0.30)
 
                 candidates.append({
                     "field_ids": g["field_ids"],
@@ -249,16 +245,17 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
             abs_diff = abs(float(chosen["variance_acres"]))
             pct = float(chosen["variance_pct"])
             name_similarity = float(chosen.get("name_similarity") or 0)
-            # High confidence can come from nearly exact acreage, or from a
-            # remembered/strong management-name identity plus reasonable acres.
-            if abs_diff <= 1.0 or pct <= 0.75 or (
-                name_similarity >= 0.90 and (abs_diff <= 10.0 or pct <= 12.0)
-            ):
+            aph_name = str(chosen.get("aph_management_name") or "")
+            generic_aph_name = _field_root(aph_name) in {"", "other ident", "other", "unknown", "nau unit"}
+            # Safety rule: acreage-only matches are suggestions, never automatic
+            # confirmations. High/medium requires corroborating management name
+            # (including an alias learned from a prior dealer confirmation).
+            if name_similarity >= 0.90 and (abs_diff <= 10.0 or pct <= 12.0):
                 confidence = "high"
-            elif abs_diff <= 3.0 or pct <= 2.0 or (
-                name_similarity >= 0.60 and (abs_diff <= 8.0 or pct <= 8.0)
-            ):
+            elif name_similarity >= 0.60 and (abs_diff <= 8.0 or pct <= 8.0):
                 confidence = "medium"
+            elif generic_aph_name and (abs_diff <= 1.0 or pct <= 0.75):
+                confidence = "review"
             else:
                 confidence = "review"
         result.append({

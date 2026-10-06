@@ -257,13 +257,13 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
     crop = _normalize_crop(crop)
     with connect() as conn:
         direct = rows_to_dicts(conn.execute(
-            "SELECT cr.crop_year,cr.yield_value,e.precipitation_in,e.heat_days_95,e.heat_days_90 "
+            "SELECT cr.crop_year,cr.yield_value,cr.approved_yield,e.precipitation_in,e.heat_days_95,e.heat_days_90 "
             "FROM crop_records cr LEFT JOIN field_year_environment e ON e.field_id=? AND e.crop_year=cr.crop_year "
             "WHERE cr.field_id=? AND upper(cr.crop)=? AND cr.yield_value IS NOT NULL ORDER BY cr.crop_year",
             (field_id, field_id, crop),
         ).fetchall())
         linked_raw = rows_to_dicts(conn.execute(
-            "SELECT cr.crop_year,cr.yield_value,cr.metadata_json,m.unit_key,"
+            "SELECT cr.crop_year,cr.yield_value,cr.approved_yield,cr.metadata_json,m.unit_key,"
             "e.precipitation_in,e.heat_days_95,e.heat_days_90 "
             "FROM aph_unit_field_links l "
             "JOIN aph_unit_matches m ON m.id=l.match_id "
@@ -287,7 +287,7 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
             seen.add(k); rows.append(r)
     yields = [float(r["yield_value"]) for r in rows if r.get("yield_value") is not None]
     if not yields:
-        return {"year_count": 0, "average_yield": None, "stability_score": None, "hot_dry_sensitivity": None}
+        return {"year_count": 0, "average_yield": None, "recent_5yr_average": None, "latest_approved_yield": None, "aph_yield_goal": None, "aph_yield_goal_source": None, "stability_score": None, "hot_dry_sensitivity": None}
     avg = mean(yields)
     stability = None
     if len(yields) >= 2 and avg:
@@ -306,10 +306,23 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
         if stress and normal and mean(normal) > 0:
             sensitivity = round(max(-0.5, min(0.5, (mean(normal) - mean(stress)) / mean(normal))), 3)
 
+    approved_rows = [
+        r for r in rows
+        if r.get("approved_yield") is not None
+    ]
+    approved_rows.sort(key=lambda r: int(r.get("crop_year") or 0))
+    latest_approved = float(approved_rows[-1]["approved_yield"]) if approved_rows else None
+    recent_avg = round(mean(yields[-5:]), 1) if yields else None
+    aph_yield_goal = round(latest_approved, 1) if latest_approved is not None else recent_avg
+    aph_yield_goal_source = "APH approved yield" if latest_approved is not None else ("APH recent 5-year average" if recent_avg is not None else None)
+
     return {
         "year_count": len(yields),
         "average_yield": round(avg, 1),
-        "recent_5yr_average": round(mean(yields[-5:]), 1),
+        "recent_5yr_average": recent_avg,
+        "latest_approved_yield": round(latest_approved, 1) if latest_approved is not None else None,
+        "aph_yield_goal": aph_yield_goal,
+        "aph_yield_goal_source": aph_yield_goal_source,
         "stability_score": stability,
         "hot_dry_sensitivity": sensitivity,
         "weather_year_count": len(weather_rows),
@@ -489,6 +502,7 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
         "field": {
             "name": row.get("name"), "acres": row.get("acres"), "crop": crop,
             "irrigation": row.get("irrigation"), "yield_goal": row.get("yield_goal"),
+                "yield_goal_source": yield_goal_source,
             "awc_0_150cm": row.get("weighted_aws150_cm"), "drainage": drainage,
             "centroid_lat": row.get("centroid_lat"), "centroid_lon": row.get("centroid_lon"),
             "maturity_window": maturity_window,
@@ -542,6 +556,14 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
                 skipped_existing += 1
                 continue
             row["production_context"] = _production_context(int(row["field_id"]), crop)
+            yield_goal_source = "manual"
+            if row.get("yield_goal") is None:
+                aph_goal = row["production_context"].get("aph_yield_goal")
+                if aph_goal is not None:
+                    row["yield_goal"] = float(aph_goal)
+                    yield_goal_source = row["production_context"].get("aph_yield_goal_source") or "APH"
+                else:
+                    yield_goal_source = None
             ranked = _rank_products(row, products_by_crop.get(crop, []))
             eligible_ranked = [x for x in ranked if x.get("location_eligible")]
             if not eligible_ranked:
@@ -561,8 +583,8 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
                     (row["field_id"], req.crop_year, crop, "channel_auto_plan", "planning"),
                 )
             conn.execute(
-                "UPDATE field_crop_plans SET crop=?,selected_seed_product_id=?,target_population=?,seeds_per_unit=?,units_required=?,seed_cost_per_acre=?,total_seed_cost=?,status='seed_selected',updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
-                (crop, top["seed_product_id"], population, unit_size, round(units_required, 3) if units_required is not None else None,
+                "UPDATE field_crop_plans SET crop=?,yield_goal=COALESCE(yield_goal,?),selected_seed_product_id=?,target_population=?,seeds_per_unit=?,units_required=?,seed_cost_per_acre=?,total_seed_cost=?,status='seed_selected',updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
+                (crop, row.get("yield_goal"), top["seed_product_id"], population, unit_size, round(units_required, 3) if units_required is not None else None,
                  round(cost_per_acre, 2) if cost_per_acre is not None else None,
                  round(total_cost, 2) if total_cost is not None else None,
                  row["field_id"], req.crop_year),

@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from aph_utils import collapse_production_records, match_identity, normalize_crop, practice_bucket, record_identity
 from database import connect, json_dumps, rows_to_dicts
 from climate_service import enrich_climate_for_fields, enrich_climate_for_farm
 
@@ -34,12 +35,7 @@ def _loads(value: Any, default):
 
 
 def _practice_bucket(value: Any) -> str:
-    s = str(value or "").upper().replace("-", "").replace(" ", "")
-    if "NIRR" in s or "NONIRR" in s:
-        return "NIRR"
-    if "IRR" in s:
-        return "IRR"
-    return s or "UNKNOWN"
+    return practice_bucket(value)
 
 
 def _field_root(name: Any) -> str:
@@ -230,6 +226,38 @@ def _unit_from_record(record: dict[str, Any]) -> str | None:
     return str(unit) if unit not in (None, "") else None
 
 
+def _conflicting_assignments(conn, match: dict[str, Any], field_ids: list[int]) -> list[dict[str, Any]]:
+    """Find same-document/same-crop/same-practice APH assignments for fields.
+
+    One mapped management field may participate in only one confirmed APH unit
+    for a crop/practice within a source document unless we add an explicit,
+    reviewed aggregation workflow later.
+    """
+    if not field_ids:
+        return []
+    metadata = _loads(match.get("metadata_json"), {})
+    target_crop = normalize_crop(metadata.get("crop"))
+    target_practice = _practice_bucket(metadata.get("practice"))
+    placeholders = ",".join("?" for _ in field_ids)
+    rows = rows_to_dicts(conn.execute(
+        f"SELECT l.field_id,m.id AS match_id,m.unit_key,m.metadata_json "
+        f"FROM aph_unit_field_links l JOIN aph_unit_matches m ON m.id=l.match_id "
+        f"WHERE m.source_document_id=? AND m.id<>? AND m.match_status='confirmed' "
+        f"AND l.field_id IN ({placeholders})",
+        (match["source_document_id"], match["id"], *field_ids),
+    ).fetchall())
+    conflicts = []
+    for row in rows:
+        md = _loads(row.get("metadata_json"), {})
+        if normalize_crop(md.get("crop")) == target_crop and _practice_bucket(md.get("practice")) == target_practice:
+            conflicts.append({
+                "field_id": int(row["field_id"]),
+                "match_id": int(row["match_id"]),
+                "unit_key": row.get("unit_key"),
+            })
+    return conflicts
+
+
 def _weather_for_field_year(field_id: int, crop_year: int) -> dict[str, Any]:
     with connect() as conn:
         loc = conn.execute(
@@ -349,6 +377,15 @@ def aph_auto_confirm(farm_id: int, req: AutoConfirmRequest):
             match = conn.execute("SELECT * FROM aph_unit_matches WHERE id=? AND farm_id=?", (match_id, farm_id)).fetchone()
             if not match:
                 continue
+            conflicts = _conflicting_assignments(conn, dict(match), field_ids)
+            if conflicts:
+                skipped.append({
+                    "match_id": match_id,
+                    "confidence": item["confidence"],
+                    "reason": "mapped field already belongs to another APH unit for this crop/practice",
+                    "conflicts": conflicts,
+                })
+                continue
             conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
             for fid in field_ids:
                 conn.execute(
@@ -361,11 +398,12 @@ def aph_auto_confirm(farm_id: int, req: AutoConfirmRequest):
                 (primary, float(suggestion["score"]) / 100.0, match_id),
             )
             recs = rows_to_dicts(conn.execute(
-                "SELECT id,metadata_json FROM crop_records WHERE source_document_id=?",
+                "SELECT id,crop,practice,metadata_json FROM crop_records WHERE source_document_id=?",
                 (match["source_document_id"],),
             ).fetchall())
+            target_identity = match_identity(dict(match))
             for rec in recs:
-                if _unit_from_record(rec) == str(match["unit_key"]):
+                if record_identity(rec) == target_identity:
                     conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
         accepted.append({
             "match_id": match_id,
@@ -434,6 +472,16 @@ def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
         if len(fields) != len(field_ids) or any(int(f["farm_id"]) != int(match["farm_id"]) for f in fields):
             raise HTTPException(status_code=400, detail="Every selected field must belong to this farm")
 
+        conflicts = _conflicting_assignments(conn, dict(match), field_ids)
+        if conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "A selected field is already matched to another APH unit for this crop/practice.",
+                    "conflicts": conflicts,
+                },
+            )
+
         conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
         for fid in field_ids:
             conn.execute(
@@ -449,12 +497,13 @@ def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
         # Keep crop_records unassigned for multi-field units. History is linked
         # through aph_unit_field_links to avoid duplicating farm production rows.
         records = rows_to_dicts(conn.execute(
-            "SELECT id,metadata_json FROM crop_records WHERE source_document_id=?",
+            "SELECT id,crop,practice,metadata_json FROM crop_records WHERE source_document_id=?",
             (match["source_document_id"],),
         ).fetchall())
         updated = 0
+        target_identity = match_identity(dict(match))
         for rec in records:
-            if _unit_from_record(rec) == str(match["unit_key"]):
+            if record_identity(rec) == target_identity:
                 conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
                 updated += 1
 
@@ -506,7 +555,7 @@ def farm_production_profile(farm_id: int):
             (farm_id,),
         ).fetchall())
         aph_links = rows_to_dicts(conn.execute(
-            "SELECT l.field_id,m.source_document_id,m.unit_key "
+            "SELECT l.field_id,m.source_document_id,m.unit_key,m.metadata_json "
             "FROM aph_unit_field_links l JOIN aph_unit_matches m ON m.id=l.match_id "
             "WHERE m.farm_id=? AND m.match_status='confirmed'",
             (farm_id,),
@@ -525,9 +574,9 @@ def farm_production_profile(farm_id: int):
     rec_by_field: dict[int, list[dict[str, Any]]] = {}
     linked_keys: dict[tuple[int,str], list[int]] = {}
     for l in aph_links:
-        linked_keys.setdefault((int(l["source_document_id"]), str(l["unit_key"])), []).append(int(l["field_id"]))
+        linked_keys.setdefault((int(l["source_document_id"]), match_identity(l)), []).append(int(l["field_id"]))
     for r in records:
-        linked = linked_keys.get((int(r["source_document_id"]), str(_unit_from_record(r) or "")), [])
+        linked = linked_keys.get((int(r["source_document_id"]), record_identity(r)), [])
         if linked:
             for fid in linked:
                 rec_by_field.setdefault(fid, []).append(r)
@@ -542,7 +591,8 @@ def farm_production_profile(farm_id: int):
     out_fields = []
     for f in fields:
         fid = int(f["id"])
-        field_records = rec_by_field.get(fid, [])
+        raw_field_records = rec_by_field.get(fid, [])
+        field_records = collapse_production_records(raw_field_records)
         years = []
         yield_vals = []
         for r in field_records:
@@ -557,6 +607,7 @@ def farm_production_profile(farm_id: int):
                 "production": r.get("production"),
                 "yield_value": yv,
                 "approved_yield": r.get("approved_yield"),
+                "source_record_count": int(r.get("_source_record_count") or 1),
                 "environment": env_by_key.get((fid, int(r["crop_year"]))) if r.get("crop_year") is not None else None,
             })
         avg_yield = round(mean(yield_vals), 1) if yield_vals else None
@@ -572,6 +623,7 @@ def farm_production_profile(farm_id: int):
                 "year_count": len(years),
                 "average_yield": avg_yield,
                 "yield_stability_score": stability,
+                "ignored_or_collapsed_source_rows": max(0, len(raw_field_records) - len(field_records)),
             },
             "years": years,
         })

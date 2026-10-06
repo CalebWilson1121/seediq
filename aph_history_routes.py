@@ -51,25 +51,31 @@ def _field_root(name: Any) -> str:
     return re.sub(r"\s+", " ", s).strip() or str(name or "").strip().lower()
 
 
-def _candidate_subsets(group: list[dict[str, Any]], target: float) -> list[tuple[list[dict[str, Any]], float]]:
-    # MBAR often breaks one management field into several polygons with the same
-    # base name. Exhaustive subsets are safe here because name groups are small.
-    out: list[tuple[list[dict[str, Any]], float]] = []
-    n = len(group)
-    max_size = min(n, 8)
-    if n <= 12:
-        for r in range(1, max_size + 1):
-            for combo in combinations(group, r):
-                total = sum(float(x.get("acres") or 0) for x in combo)
-                out.append((list(combo), total))
-    else:
-        # Fallback for unusually fragmented source maps: beam-search by acreage.
-        states: list[tuple[list[dict[str, Any]], float]] = [([], 0.0)]
-        for fld in group:
-            nxt = states + [(items + [fld], total + float(fld.get("acres") or 0)) for items, total in states if len(items) < max_size]
-            nxt.sort(key=lambda z: abs(z[1] - target))
-            states = nxt[:250]
-        out.extend((items, total) for items, total in states if items)
+
+def _group_candidates(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build logical management-field groups from mapped polygons.
+
+    Names like 'Bins (1)', 'Bins (2)', 'Bins (3)' are one group. Single fields
+    stay as one-member groups. This is intentionally much faster and safer than
+    arbitrary subset search.
+    """
+    grouped: dict[tuple[str,str], list[dict[str, Any]]] = {}
+    for fld in fields:
+        practice = _practice_bucket(fld.get("irrigation") or fld.get("practice"))
+        root = _field_root(fld.get("name"))
+        grouped.setdefault((practice, root), []).append(fld)
+
+    out: list[dict[str, Any]] = []
+    for (practice, root), members in grouped.items():
+        members = sorted(members, key=lambda x: str(x.get("name") or ""))
+        total = round(sum(float(x.get("acres") or 0) for x in members), 2)
+        out.append({
+            "practice": practice,
+            "root": root,
+            "field_ids": [int(x["id"]) for x in members],
+            "field_names": [x.get("name") for x in members],
+            "selected_acres": total,
+        })
     return out
 
 
@@ -80,90 +86,106 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
             (farm_id,),
         ).fetchall())
         fields = rows_to_dicts(conn.execute(
-            "SELECT f.id,f.name,f.acres,f.irrigation,f.practice,f.farm_number,f.tract_number,f.field_number,"
-            "fl.centroid_lat,fl.centroid_lon FROM fields f "
-            "LEFT JOIN field_locations fl ON fl.field_id=f.id WHERE f.farm_id=? ORDER BY f.name",
+            "SELECT id,name,acres,irrigation,practice,farm_number,tract_number,field_number "
+            "FROM fields WHERE farm_id=? ORDER BY name",
             (farm_id,),
         ).fetchall())
 
-    groups: dict[tuple[str,str], list[dict[str, Any]]] = {}
-    for fld in fields:
-        fld["practice_bucket"] = _practice_bucket(fld.get("irrigation") or fld.get("practice"))
-        fld["name_root"] = _field_root(fld.get("name"))
-        groups.setdefault((fld["practice_bucket"], fld["name_root"]), []).append(fld)
+    groups = _group_candidates(fields)
 
+    # Build candidate rankings independently for every APH unit. Acreage and
+    # practice are the main signals; names are only used to keep split polygons
+    # together as a management field.
     candidate_map: dict[int, list[dict[str, Any]]] = {}
     for m in matches:
         md = _loads(m.get("metadata_json"), {})
-        target = float(md.get("aph_acres") or 0)
+        target_raw = md.get("aph_acres")
+        target = float(target_raw) if target_raw not in (None, "") else 0.0
         crop = str(md.get("crop") or "").upper()
         practice = _practice_bucket(md.get("practice"))
-        if target <= 0:
-            candidate_map[int(m["id"])] = []
-            continue
-
         candidates: list[dict[str, Any]] = []
-        for (bucket, root), group in groups.items():
-            if practice != "UNKNOWN" and bucket != practice:
-                continue
-            for combo, total in _candidate_subsets(group, target):
-                diff = total - target
-                abs_diff = abs(diff)
-                pct = abs_diff / max(target, 1.0)
-                if pct > 0.12 and abs_diff > 5.0:
+
+        if target > 0:
+            for g in groups:
+                if practice != "UNKNOWN" and g["practice"] != practice:
                     continue
-                same_root = len({_field_root(x.get("name")) for x in combo}) == 1
-                acreage_points = max(0.0, 70.0 - pct * 900.0)
-                root_points = 18.0 if same_root else 0.0
-                practice_points = 8.0 if practice == bucket else 0.0
-                exact_points = 4.0 if pct <= 0.005 else (2.0 if pct <= 0.015 else 0.0)
-                score = round(min(100.0, acreage_points + root_points + practice_points + exact_points), 1)
+                total = float(g["selected_acres"])
+                diff = round(total - target, 2)
+                abs_diff = abs(diff)
+                pct = abs_diff / max(target, 1.0) * 100.0
+
+                # Keep the review list useful. We generally do not care about
+                # groups that are wildly different in acreage.
+                if abs_diff > max(12.0, target * 0.08):
+                    continue
+
+                # Acreage is intentionally dominant.
+                if abs_diff <= 0.25:
+                    score = 100.0
+                elif abs_diff <= 0.75:
+                    score = 98.0
+                elif abs_diff <= 1.50:
+                    score = 95.0
+                elif pct <= 1.0:
+                    score = 93.0
+                elif pct <= 2.0:
+                    score = 88.0
+                elif pct <= 3.5:
+                    score = 80.0
+                elif pct <= 5.0:
+                    score = 70.0
+                else:
+                    score = 55.0
+
                 candidates.append({
-                    "field_ids": [int(x["id"]) for x in combo],
-                    "field_names": [x.get("name") for x in combo],
-                    "field_root": root,
+                    "field_ids": g["field_ids"],
+                    "field_names": g["field_names"],
+                    "field_root": g["root"],
                     "selected_acres": round(total, 2),
                     "aph_acres": round(target, 2),
-                    "variance_acres": round(diff, 2),
-                    "variance_pct": round(pct * 100.0, 2),
+                    "variance_acres": diff,
+                    "variance_pct": round(pct, 2),
                     "score": score,
                     "crop": crop,
                     "practice": practice,
-                    "reason": f"{root or 'field group'} polygons total {total:.2f} ac vs APH {target:.2f} ac",
+                    "reason": f"{g['root'] or 'field group'} totals {total:.2f} ac vs APH {target:.2f} ac",
                 })
-        # Deduplicate exact field sets, best score first.
-        unique: dict[tuple[int,...], dict[str, Any]] = {}
-        for cand in sorted(candidates, key=lambda x: (-x["score"], abs(x["variance_acres"]), len(x["field_ids"]))):
-            key = tuple(sorted(cand["field_ids"]))
-            unique.setdefault(key, cand)
-        candidate_map[int(m["id"])] = list(unique.values())[:12]
 
-    # Global pass: within the same crop+practice, do not hand the same mapped
-    # field to two different APH units. Across crops, reuse is valid for rotation.
-    allocated: dict[tuple[str,str], set[int]] = {}
-    ordered = []
+        candidates.sort(key=lambda x: (-x["score"], abs(x["variance_acres"]), len(x["field_ids"]), x["field_root"]))
+        candidate_map[int(m["id"])] = candidates[:8]
+
+    # Avoid assigning the same mapped group to two APH units within the same
+    # crop/practice. We resolve the most exact/unique acreage matches first.
+    by_bucket: dict[tuple[str,str], list[tuple[dict[str,Any],dict[str,Any]]]] = {}
     for m in matches:
         md = _loads(m.get("metadata_json"), {})
-        cands = candidate_map.get(int(m["id"]), [])
-        margin = (cands[0]["score"] - cands[1]["score"]) if len(cands) > 1 else (cands[0]["score"] if cands else 0)
-        ordered.append((-(cands[0]["score"] if cands else 0), -margin, int(m["id"]), m, md))
-    ordered.sort()
+        bucket = (str(md.get("crop") or "").upper(), _practice_bucket(md.get("practice")))
+        by_bucket.setdefault(bucket, []).append((m, md))
 
     suggestions: dict[int, dict[str, Any] | None] = {}
-    for _, _, mid, m, md in ordered:
-        crop = str(md.get("crop") or "").upper()
-        practice = _practice_bucket(md.get("practice"))
-        bucket = (crop, practice)
-        used = allocated.setdefault(bucket, set())
-        chosen = None
-        for cand in candidate_map.get(mid, []):
-            ids = set(cand["field_ids"])
-            if not (ids & used):
-                chosen = cand
-                break
-        if chosen:
-            used.update(chosen["field_ids"])
-        suggestions[mid] = chosen
+    for bucket, items in by_bucket.items():
+        remaining = {int(m["id"]): list(candidate_map.get(int(m["id"]), [])) for m, _ in items}
+        used_groups: set[tuple[int,...]] = set()
+
+        # Iteratively take the best "most certain" match: lowest acreage
+        # variance first, then biggest lead over the second-best candidate.
+        while remaining:
+            choices = []
+            for mid, cands in remaining.items():
+                available = [x for x in cands if tuple(sorted(x["field_ids"])) not in used_groups]
+                if not available:
+                    choices.append((999999.0, 999999.0, mid, None))
+                    continue
+                top = available[0]
+                second = available[1] if len(available) > 1 else None
+                lead = (top["score"] - second["score"]) if second else 100.0
+                choices.append((abs(top["variance_acres"]), -lead, mid, top))
+            choices.sort(key=lambda x: (x[0], x[1]))
+            _, _, mid, chosen = choices[0]
+            suggestions[mid] = chosen
+            if chosen:
+                used_groups.add(tuple(sorted(chosen["field_ids"])))
+            remaining.pop(mid, None)
 
     result = []
     for m in matches:
@@ -171,9 +193,12 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
         chosen = suggestions.get(int(m["id"]))
         confidence = "none"
         if chosen:
-            if chosen["score"] >= 92 and chosen["variance_pct"] <= 1.5:
+            abs_diff = abs(float(chosen["variance_acres"]))
+            pct = float(chosen["variance_pct"])
+            # High confidence is intentionally strict: exact/near-exact acreage.
+            if abs_diff <= 1.0 or pct <= 0.75:
                 confidence = "high"
-            elif chosen["score"] >= 75 and chosen["variance_pct"] <= 4.0:
+            elif abs_diff <= 3.0 or pct <= 2.0:
                 confidence = "medium"
             else:
                 confidence = "review"
@@ -194,6 +219,7 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
         "high_confidence_count": sum(1 for x in result if x["confidence"] == "high"),
         "medium_confidence_count": sum(1 for x in result if x["confidence"] == "medium"),
         "needs_review_count": sum(1 for x in result if x["confidence"] not in {"high","medium"}),
+        "method": "Fast group-first APH matching: mapped split polygons are grouped by field name root; acreage + IRR/NIRR drive the match.",
     }
 
 

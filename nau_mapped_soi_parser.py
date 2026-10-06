@@ -14,7 +14,7 @@ from shapely.ops import transform, unary_union
 
 from models import ParsedDocument, ParsedField, SourceFact
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 FIELD_RE = re.compile(
     r"f(?P<nau>\d+)\s+F(?P<farm>\d+)-T(?P<tract>\d+)-(?P<field>\d+)\s+(?P<acres>[0-9.]+)A",
@@ -49,6 +49,76 @@ class _RasterComponent:
     area: int
     runs: list[tuple[int, int, int]]
     estimated_acres: float = 0.0
+
+
+def _practice_bucket(value: Any) -> str:
+    raw = str(value or "").upper().replace("-", "").replace(" ", "")
+    if "NIRR" in raw or "NONIRR" in raw:
+        return "NIRR"
+    if "IRR" in raw:
+        return "IRR"
+    return raw or "UNKNOWN"
+
+
+def _unit_memberships(full_text: str) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    """Build authoritative current SOI unit -> physical field memberships.
+
+    The prior parser inferred unit numbers by looking backward from each field
+    occurrence. On dense SOI pages that can bleed a neighboring unit into the
+    next Field Location block. NAU's Total Unit Summary is a much safer anchor:
+    the immediately preceding Field Location Identification list is the set of
+    physical FSA fields that belongs to that unit.
+    """
+    out: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    summary_re = re.compile(
+        r"Total Unit Summary(?P<unit>\d{4}-\d{4})(?:-\d{3})?\n"
+        r"(?P<crop>CORN|SOYBEANS?)\n(?P<practice>[^\n]+)\n"
+        r"Acres:\s*(?P<acres>[0-9,.]+)",
+        re.I,
+    )
+    summaries = list(summary_re.finditer(full_text))
+    previous_end = 0
+    for sm in summaries:
+        search_start = max(previous_end, full_text.rfind("Field Location Identification:", previous_end, sm.start()))
+        block = full_text[search_start:sm.start()]
+        fl = re.search(
+            r"Field Location Identification(?: Continued)?:\s*(.*?)(?=2026 Total Prod|Other:|$)",
+            block,
+            re.I | re.S,
+        )
+        if not fl:
+            previous_end = sm.end()
+            continue
+        crop = sm.group("crop").upper()
+        crop = "SOYBEANS" if crop.startswith("SOY") else "CORN"
+        practice = re.sub(r"\s+", " ", sm.group("practice").strip().upper())
+        unit_number = sm.group("unit") + "-000"
+        unit_acres = float(sm.group("acres").replace(",", ""))
+        names = re.findall(r"Other:\s*Farm Name:\s*([^\n]+)", block, re.I)
+        management_name = None
+        if names:
+            candidate = re.sub(r"\s+", " ", names[-1]).strip(" -")
+            if candidate and not re.fullmatch(r"\d+/\d+/\d+", candidate):
+                management_name = candidate
+        for fm in FIELD_RE.finditer(fl.group(1)):
+            g = fm.groupdict()
+            key = (g["farm"], g["tract"], g["field"])
+            membership = {
+                "unit_number": unit_number,
+                "crop": crop,
+                "practice": practice,
+                "practice_bucket": _practice_bucket(practice),
+                "unit_reported_acres": unit_acres,
+                "management_name": management_name,
+                "source_field_location_id": g["nau"],
+                "physical_reported_acres": float(g["acres"]),
+            }
+            existing = out.setdefault(key, [])
+            ident = (unit_number, crop, _practice_bucket(practice))
+            if not any((x.get("unit_number"), x.get("crop"), x.get("practice_bucket")) == ident for x in existing):
+                existing.append(membership)
+        previous_end = sm.end()
+    return out
 
 
 def looks_like_nau_mapped_soi(text: str) -> bool:
@@ -356,6 +426,7 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
     reader = PdfReader(str(path))
     page_texts = [(page.extract_text() or "") for page in reader.pages]
     full_text = "\n".join(page_texts)
+    unit_memberships = _unit_memberships(full_text)
     out = ParsedDocument(document_type="SOI", producer_name=_producer_name(full_text), raw_preview=full_text[:6000])
     out.farm_name = out.producer_name
     out.policy_number = None
@@ -417,10 +488,12 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 "legal_section": entry.section,
                 "township_range": entry.township_range,
                 "insurance_data_scrubbed": True,
-                "insurance_unit_number": entry.unit_number,
-                "source_crop": entry.crop,
-                "source_practice": entry.practice,
-                "unit_identity_source": "NAU Mapped SOI",
+                "insurance_unit_memberships": unit_memberships.get(key, []),
+                "insurance_unit_number": (unit_memberships.get(key, [{}])[0].get("unit_number") if unit_memberships.get(key) else entry.unit_number),
+                "source_crop": (unit_memberships.get(key, [{}])[0].get("crop") if unit_memberships.get(key) else entry.crop),
+                "source_practice": (unit_memberships.get(key, [{}])[0].get("practice") if unit_memberships.get(key) else entry.practice),
+                "management_name": (unit_memberships.get(key, [{}])[0].get("management_name") if unit_memberships.get(key) else entry.common_name),
+                "unit_identity_source": "NAU Total Unit Summary + Field Location Identification",
                 "geometry_status": "reference_missing",
                 "geometry_authoritative": False,
             }
@@ -462,9 +535,9 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 ("legal_section", entry.section),
                 ("township_range", entry.township_range),
                 ("source_field_location_id", entry.nau_id),
-                ("insurance_unit_number", entry.unit_number),
-                ("source_crop", entry.crop),
-                ("source_practice", entry.practice),
+                ("insurance_unit_number", metadata.get("insurance_unit_number")),
+                ("source_crop", metadata.get("source_crop")),
+                ("source_practice", metadata.get("source_practice")),
             ):
                 out.facts.append(SourceFact("mapped_soi_field", entity_key, field_name, value, source_locator=f"page:{entry.page}", confidence=1.0))
     out.fields = list(parsed_fields.values())
@@ -474,5 +547,6 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
         out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities; {geometry_matches} received raster-georeferenced reference shapes. Reference shapes are locators only and are not promoted to authoritative SeedIQ boundaries.")
     else:
         out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes. SeedIQ requires exact MBAR/GIS or confirmed manual geometry before soil and production recommendations use a boundary.")
-    out.warnings.append("Insurance financial/election data was intentionally excluded. Unit number is retained only as a field-identity bridge for APH matching.")
+    membership_fields = sum(1 for f in out.fields if (f.metadata or {}).get("insurance_unit_memberships"))
+    out.warnings.append(f"Insurance financial/election data was intentionally excluded. Current unit membership was anchored from NAU Total Unit Summary for {membership_fields}/{len(out.fields)} physical fields and is retained only as an APH identity bridge.")
     return out

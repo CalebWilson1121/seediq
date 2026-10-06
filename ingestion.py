@@ -162,6 +162,109 @@ def _prepare_reprocess(existing) -> None:
         conn.execute("DELETE FROM documents WHERE id=?", (document_id,))
 
 
+
+def _norm_practice(value: Any) -> str:
+    s = str(value or "").upper().replace("-", "").replace(" ", "")
+    if "NIRR" in s or "NONIRR" in s:
+        return "NIRR"
+    if "IRR" in s:
+        return "IRR"
+    return s
+
+
+def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    meta = parsed_field.metadata or {}
+    aph_farm = str(meta.get("fsa_farm_number") or "").strip()
+    aph_tract = str(meta.get("fsa_tract_number") or "").strip()
+    aph_field = str(meta.get("fsa_field_number") or "").strip()
+    aph_acres = float(parsed_field.acres or 0)
+    aph_practice = _norm_practice(parsed_field.practice or parsed_field.irrigation)
+    out = []
+    for mf in mapped_fields:
+        score = 0.0
+        reasons = []
+        exact_ids = 0
+        for aph_value, field_key, label in (
+            (aph_farm, "farm_number", "farm"),
+            (aph_tract, "tract_number", "tract"),
+            (aph_field, "field_number", "field"),
+        ):
+            mapped_value = str(mf.get(field_key) or "").strip()
+            if aph_value and mapped_value and aph_value == mapped_value:
+                exact_ids += 1
+                score += 0.22
+                reasons.append(f"FSA {label} match")
+        mapped_acres = float(mf.get("acres") or 0)
+        if aph_acres and mapped_acres:
+            pct = abs(mapped_acres - aph_acres) / max(aph_acres, 1)
+            if pct <= 0.01:
+                score += 0.28; reasons.append("acreage within 1%")
+            elif pct <= 0.03:
+                score += 0.20; reasons.append("acreage within 3%")
+            elif pct <= 0.08:
+                score += 0.10; reasons.append("acreage within 8%")
+        mapped_practice = _norm_practice(mf.get("irrigation") or mf.get("practice"))
+        if aph_practice and mapped_practice and aph_practice == mapped_practice:
+            score += 0.12; reasons.append("practice match")
+        if parsed_field.county and mf.get("county") and str(parsed_field.county).lower() == str(mf.get("county")).lower():
+            score += 0.04; reasons.append("county match")
+        out.append({
+            "field_id": int(mf["id"]),
+            "field_name": mf.get("name"),
+            "score": round(min(score, 0.99), 3),
+            "exact_fsa_parts": exact_ids,
+            "reasons": reasons,
+            "mapped_acres": mapped_acres,
+            "aph_acres": aph_acres,
+        })
+    return sorted(out, key=lambda x: (-x["score"], abs(x["mapped_acres"] - x["aph_acres"])))
+
+
+def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> tuple[dict[str, int], int]:
+    mapped_fields = [dict(r) for r in conn.execute(
+        "SELECT id,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation FROM fields WHERE farm_id=? ORDER BY name",
+        (farm_id,),
+    ).fetchall()]
+    if not mapped_fields:
+        raise ValueError("Map the farm before uploading APH. SeedIQ will not create fields from APH.")
+    matches: dict[str, int] = {}
+    units = 0
+    for pf in parsed.fields:
+        meta = pf.metadata or {}
+        unit_key = str(meta.get("unit") or pf.field_number or pf.name or f"unit-{units+1}")
+        candidates = _aph_match_candidates(pf, mapped_fields)
+        top = candidates[0] if candidates else None
+        auto_field_id = None
+        status = "unmatched"
+        method = "needs_confirmation"
+        confidence = top["score"] if top else 0.0
+        # Only auto-attach when regulatory identity is strong. Acreage alone is
+        # useful for suggestions but is never enough to silently assign APH.
+        if top and top.get("exact_fsa_parts", 0) >= 2 and top["score"] >= 0.55:
+            auto_field_id = int(top["field_id"])
+            status = "confirmed"
+            method = "fsa_identity_auto"
+            matches[unit_key] = auto_field_id
+        match_meta = {
+            "crop": pf.crop,
+            "practice": pf.practice,
+            "aph_acres": pf.acres,
+            "fsa_farm_number": meta.get("fsa_farm_number"),
+            "fsa_tract_number": meta.get("fsa_tract_number"),
+            "fsa_field_number": meta.get("fsa_field_number"),
+            "unit_number": meta.get("unit") or pf.field_number,
+            "candidates": candidates[:8],
+        }
+        conn.execute(
+            "INSERT INTO aph_unit_matches(farm_id,source_document_id,unit_key,field_id,match_status,confidence,method,metadata_json) "
+            "VALUES(?,?,?,?,?,?,?,?::jsonb) ON CONFLICT(source_document_id,unit_key) DO UPDATE SET "
+            "field_id=excluded.field_id,match_status=excluded.match_status,confidence=excluded.confidence,method=excluded.method,"
+            "metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
+            (farm_id, document_id, unit_key, auto_field_id, status, confidence, method, json_dumps(match_meta)),
+        )
+        units += 1
+    return matches, units
+
 def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = None, reprocess: bool = False, target_farm_id: int | None = None) -> dict[str, Any]:
     sha = sha256_file(temp_path)
     with connect() as conn:
@@ -194,22 +297,27 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
 
         field_id_by_key: dict[str, int] = {}
         field_boundaries: list[tuple[int, dict]] = []
-        for i, f in enumerate(parsed.fields):
-            key_parts = [str(x or "") for x in [f.farm_number, f.tract_number, f.field_number]]
-            local_key = "|".join(x for x in key_parts if x) or f.name or f"field-{i+1}"
-            field_key = f"{farm_id}:{local_key}"
-            conn.execute(
-                "INSERT INTO fields(farm_id,field_key,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(field_key) DO UPDATE SET name=excluded.name,acres=COALESCE(excluded.acres,fields.acres),county=COALESCE(excluded.county,fields.county),state=COALESCE(excluded.state,fields.state),farm_number=COALESCE(excluded.farm_number,fields.farm_number),tract_number=COALESCE(excluded.tract_number,fields.tract_number),field_number=COALESCE(excluded.field_number,fields.field_number),crop=CASE WHEN excluded.crop IS NULL THEN fields.crop ELSE excluded.crop END,practice=COALESCE(excluded.practice,fields.practice),irrigation=COALESCE(excluded.irrigation,fields.irrigation),metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
-                (farm_id, field_key, f.name, f.acres, f.county, f.state, f.farm_number, f.tract_number, f.field_number, f.crop, f.practice, f.irrigation, json_dumps(f.metadata)),
-            )
-            field_row = conn.execute("SELECT id FROM fields WHERE field_key=?", (field_key,)).fetchone()
-            field_id = int(field_row["id"])
-            field_id_by_key[local_key] = field_id
-            if f.field_number:
-                field_id_by_key[str(f.field_number)] = field_id
-            if parsed.document_type in {"MBAR", "SOI"} and (f.metadata or {}).get("boundary_geojson"):
-                field_boundaries.append((field_id, f.metadata["boundary_geojson"]))
+        aph_units_parsed = 0
+        map_first_aph = parsed.document_type == "APH" and target_farm_id is not None
+        if map_first_aph:
+            field_id_by_key, aph_units_parsed = _prepare_aph_map_first(conn, farm_id, document_id, parsed)
+        else:
+            for i, f in enumerate(parsed.fields):
+                key_parts = [str(x or "") for x in [f.farm_number, f.tract_number, f.field_number]]
+                local_key = "|".join(x for x in key_parts if x) or f.name or f"field-{i+1}"
+                field_key = f"{farm_id}:{local_key}"
+                conn.execute(
+                    "INSERT INTO fields(farm_id,field_key,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(field_key) DO UPDATE SET name=excluded.name,acres=COALESCE(excluded.acres,fields.acres),county=COALESCE(excluded.county,fields.county),state=COALESCE(excluded.state,fields.state),farm_number=COALESCE(excluded.farm_number,fields.farm_number),tract_number=COALESCE(excluded.tract_number,fields.tract_number),field_number=COALESCE(excluded.field_number,fields.field_number),crop=CASE WHEN excluded.crop IS NULL THEN fields.crop ELSE excluded.crop END,practice=COALESCE(excluded.practice,fields.practice),irrigation=COALESCE(excluded.irrigation,fields.irrigation),metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
+                    (farm_id, field_key, f.name, f.acres, f.county, f.state, f.farm_number, f.tract_number, f.field_number, f.crop, f.practice, f.irrigation, json_dumps(f.metadata)),
+                )
+                field_row = conn.execute("SELECT id FROM fields WHERE field_key=?", (field_key,)).fetchone()
+                field_id = int(field_row["id"])
+                field_id_by_key[local_key] = field_id
+                if f.field_number:
+                    field_id_by_key[str(f.field_number)] = field_id
+                if parsed.document_type in {"MBAR", "SOI"} and (f.metadata or {}).get("boundary_geojson"):
+                    field_boundaries.append((field_id, f.metadata["boundary_geojson"]))
 
         for r in parsed.crop_records:
             field_id = field_id_by_key.get(r.field_key)
@@ -229,4 +337,4 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             except Exception as exc:
                 parsed.warnings.append(f"Field {field_id} boundary could not be saved: {exc}")
 
-    return {"duplicate": False, "reprocessed": bool(existing and reprocess), "document_id": document_id, "farm_id": farm_id, "prospect_id": prospect_id, "document_type": parsed.document_type, "parser": parser_name, "fields_created_or_updated": len(parsed.fields), "crop_records_created": len(parsed.crop_records), "facts_stored": len(parsed.facts), "warnings": parsed.warnings, "storage": stored_path, "database": backend_name()}
+    return {"duplicate": False, "reprocessed": bool(existing and reprocess), "document_id": document_id, "farm_id": farm_id, "prospect_id": prospect_id, "document_type": parsed.document_type, "parser": parser_name, "fields_created_or_updated": (0 if (parsed.document_type == "APH" and target_farm_id is not None) else len(parsed.fields)), "aph_units_parsed": aph_units_parsed, "crop_records_created": len(parsed.crop_records), "facts_stored": len(parsed.facts), "warnings": parsed.warnings, "storage": stored_path, "database": backend_name()}

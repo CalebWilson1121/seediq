@@ -331,89 +331,15 @@ def _sync_rows(products: list[dict[str, Any]], organization_id: int, catalog_id:
     return {"inserted": inserted, "updated": updated}
 
 
-@router.get("/api/admin/channel-catalog-probe")
-def channel_catalog_probe(crop: str = "corn", page: int = 0):
-    crop = crop.lower()
-    if crop not in {"corn", "soybeans"}:
-        raise HTTPException(status_code=400, detail="crop must be corn or soybeans")
-    url = f"{BAYER_BASE}/{crop}/channel/seed-catalog" + (f"?page={page}" if page else "")
-    r = _fetch(url)
-    rows = _page_products(r.text)
-    data = _next_data(r.text) or {}
-    pp = ((data.get("props") or {}).get("pageProps") or {})
-    dehydrated = pp.get("dehydratedState") or {}
-    query_debug = []
-    for q in dehydrated.get("queries") or []:
-        state = q.get("state") or {}
-        qdata = state.get("data")
-        query_debug.append({
-            "queryKey": q.get("queryKey"),
-            "queryHash": q.get("queryHash"),
-            "data_type": type(qdata).__name__,
-            "data_keys": list(qdata.keys()) if isinstance(qdata, dict) else None,
-            "data_meta": {k:v for k,v in qdata.items() if k != "products"} if isinstance(qdata, dict) else None,
-        })
-    return {
-        "url": str(r.url),
-        "status": r.status_code,
-        "bytes": len(r.content),
-        "next_data_found": bool(data),
-        "build_id": data.get("buildId"),
-        "access_token_prefix": str(pp.get("accessToken") or "")[:24],
-        "product_count": len(rows),
-        "query_debug": query_debug,
-        "products": [
-            {
-                "title": p.get("title"),
-                "maturity": p.get("maturity"),
-                "trait": _trait_text(p.get("trait")),
-                "seoSlug": p.get("seoSlug"),
-            }
-            for p in rows
-        ],
-    }
-
-
-@router.get("/api/admin/channel-catalog-client-discovery")
-def channel_catalog_client_discovery():
-    src = "/_next/static/chunks/pages/%5Bcrop%5D/%5Bbrand%5D/seed-catalog-74c25bf669a9b3e6.js"
-    js = _fetch(BAYER_BASE + src).text
-    hits = []
-    for needle in ("Q(", "Q.apply", "productsQuery", "serverRbmEnabled"):
-        at = 0
-        while len(hits) < 24:
-            p = js.find(needle, at)
-            if p < 0:
-                break
-            hits.append({"needle": needle, "snippet": js[max(0,p-2200):p+3800]})
-            at = p + len(needle)
-    return {"src": src, "bytes": len(js), "hits": hits}
-
-
-# Temporary operator endpoint used to seed the live catalog. Remove/lock down after sync.
-@router.get("/api/admin/channel-graphql-probe")
-def channel_graphql_probe(crop: str = "CORN"):
-    crop = crop.upper()
-    if crop not in {"CORN", "SOYBEANS"}:
-        raise HTTPException(status_code=400, detail="crop must be CORN or SOYBEANS")
-    data = _graphql_product_page(crop, 0, 3)
-    return {
-        "crop": crop,
-        "total": data.get("total"),
-        "sample": [_prepare_graphql_product(x) for x in (data.get("products") or [])],
-    }
-
-
-@router.get("/api/admin/channel-catalog-sync-once")
-def channel_catalog_sync_once(organization_id: int = 2, catalog_id: int = 1, crop_year: int = 2027):
+def sync_channel_catalog(organization_id: int = 2, catalog_id: int = 1, crop_year: int = 2027) -> dict[str, Any]:
+    """Internal service function for refreshing the Channel master catalog from Bayer."""
     corn_raw, corn_total = _graphql_all_products("CORN")
     soy_raw, soy_total = _graphql_all_products("SOYBEANS")
     corn = [_normalized(_prepare_graphql_product(x), "CORN") for x in corn_raw]
     soy = [_normalized(_prepare_graphql_product(x), "SOYBEANS") for x in soy_raw]
     if len(corn) != corn_total or len(soy) != soy_total:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Incomplete Bayer catalog response: corn {len(corn)}/{corn_total}, soybeans {len(soy)}/{soy_total}",
+        raise RuntimeError(
+            f"Incomplete Bayer catalog response: corn {len(corn)}/{corn_total}, soybeans {len(soy)}/{soy_total}"
         )
     sync = _sync_rows(corn + soy, organization_id, catalog_id, crop_year)
     return {
@@ -428,3 +354,4 @@ def channel_catalog_sync_once(organization_id: int = 2, catalog_id: int = 1, cro
         **sync,
         "source": f"{BAYER_BFF}/graphql",
     }
+

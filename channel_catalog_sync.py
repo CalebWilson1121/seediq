@@ -276,7 +276,7 @@ def _normalized(raw: dict[str, Any], crop: str) -> dict[str, Any]:
         "source": "Bayer Crop Science live Channel catalog",
         "source_slug": slug,
         "new_product": bool(raw.get("newProduct")),
-        "sync_method": "__NEXT_DATA__ catalog pagination",
+        "sync_method": "Bayer GraphQL getSeedProducts",
         "raw_strengths": strengths,
         "hybrid_qualities": raw.get("hybridQualities"),
         "characteristics": raw.get("characteristics"),

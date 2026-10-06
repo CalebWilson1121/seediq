@@ -260,35 +260,17 @@ def channel_catalog_probe(crop: str = "corn", page: int = 0):
 def channel_catalog_client_discovery():
     src = "/_next/static/chunks/pages/%5Bcrop%5D/%5Bbrand%5D/seed-catalog-74c25bf669a9b3e6.js"
     js = _fetch(BAYER_BASE + src).text
-    low = js.lower()
-    needle = "query getseedproducts"
-    p = low.find(needle)
-    module_id = None
-    module_header = None
-    call_sites = []
-    if p >= 0:
-        before = js[max(0, p-12000):p]
-        mods = list(re.finditer(r"(\\d+):function\\(e,t,r\\)", before))
-        if mods:
-            m = mods[-1]
-            module_id = m.group(1)
-            module_header = before[m.start():m.start()+1000]
-            pattern = f"r({module_id})"
-            at = 0
-            while len(call_sites) < 12:
-                q = js.find(pattern, at)
-                if q < 0:
-                    break
-                call_sites.append(js[max(0,q-1200):q+2200])
-                at = q + len(pattern)
-    return {
-        "src": src,
-        "bytes": len(js),
-        "module_id": module_id,
-        "module_header": module_header,
-        "call_sites": call_sites,
-        "query_snippet": js[max(0,p-1600):p+3500] if p >= 0 else None,
-    }
+    needles = ["r(58917)", "(0,r(58917)", "58917)", ".$( "]
+    hits = []
+    for needle in needles:
+        at = 0
+        while len(hits) < 20:
+            p = js.find(needle, at)
+            if p < 0:
+                break
+            hits.append({"needle": needle, "snippet": js[max(0,p-1800):p+3200]})
+            at = p + len(needle)
+    return {"src": src, "bytes": len(js), "hits": hits}
 
 
 # Temporary operator endpoint used to seed the live catalog. Remove/lock down after sync.

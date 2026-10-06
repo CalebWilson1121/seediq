@@ -54,8 +54,9 @@ function fieldCard(s,plan){const drainage=topDistribution(s.drainage_summary);co
 async function deleteSplitField(fieldId,name){
   if(!confirm('Delete '+name+' and restore its acreage back to the original field?'))return;
   try{
-    await api('/api/fields/'+fieldId,{method:'DELETE'});
+    const r=await api('/api/fields/'+fieldId,{method:'DELETE'});
     prospect=await api('/api/prospects/'+id);await loadPlans();render();
+    if(r.soil_warning)alert(r.soil_warning);
   }catch(e){alert(e.message)}
 }
 async function deleteSavedCut(fieldId,index){
@@ -153,7 +154,8 @@ async function saveDrawField(){
 
     const existingNames=new Set(((prospect.farm_context||{}).fields||[]).map(f=>String(f.name||'').toLowerCase()));
     existingNames.add(name.toLowerCase());
-    const created=[];
+    const created=[],soilWarnings=[];
+    if(r.soil_warning)soilWarnings.push(name+': '+r.soil_warning);
     for(let i=0;i<appliedCuts.length;i++){
       let newName=name+' new',n=2;
       while(existingNames.has(newName.toLowerCase()))newName=name+' new '+(n++);
@@ -171,9 +173,10 @@ async function saveDrawField(){
         split_parent_field_id:editingFieldId
       })});
       created.push(child.field);
+      if(child.soil_warning)soilWarnings.push(newName+': '+child.soil_warning);
     }
 
-    s.textContent=(created.length?('Saved split: '+Number(r.field?.acres||drawAreaAcres).toFixed(2)+' ac remains in '+name+'; '+created.map(x=>x.name+' ('+Number(x.acres||0).toFixed(2)+' ac)').join(', ')+' created.'):(editingFieldId?'Updated ':'Saved ')+(r.field?.acres?Number(r.field.acres).toFixed(2):drawAreaAcres.toFixed(2))+' acres. Soil profile is refreshed.');
+    s.textContent=(created.length?('Saved split: '+Number(r.field?.acres||drawAreaAcres).toFixed(2)+' ac remains in '+name+'; '+created.map(x=>x.name+' ('+Number(x.acres||0).toFixed(2)+' ac)').join(', ')+' created.'):(editingFieldId?'Updated ':'Saved ')+(r.field?.acres?Number(r.field.acres).toFixed(2):drawAreaAcres.toFixed(2))+' acres.')+(soilWarnings.length?' '+soilWarnings.join(' '):' SSURGO refreshed.');
     drawMode=false;editingFieldId=null;appliedCuts=[];baseFeature=null;stopDrawListener();
     prospect=await api('/api/prospects/'+id);await loadPlans();render();
   }catch(e){s.className='draw-status warn';s.textContent=e.message;b.disabled=false}

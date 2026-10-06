@@ -334,7 +334,7 @@ def save_seed_selection(field_id: int, req: SeedSelectionRequest):
     return select_seed(field_id, req.crop_year, req.seed_product_id, req.target_population, req.notes)
 
 @app.post("/api/prospects")
-def create_prospect(req: ProspectCreateRequest):
+def create_prospect(req: ProspectCreateRequest, request: Request):
     farm_name = (req.farm_name or "").strip()
     main_contact = (req.main_contact or "").strip()
     state = (req.state or "").strip().upper()
@@ -349,23 +349,25 @@ def create_prospect(req: ProspectCreateRequest):
         raise HTTPException(status_code=400, detail="County is required")
 
     farm_key = f"manual:{uuid.uuid4().hex}"
+    user = _user(request)
+    organization_id = int(user["organization_id"]) if user and user.get("organization_id") is not None else int(req.organization_id)
     try:
         with connect() as conn:
             org = conn.execute(
                 "SELECT id FROM dealer_organizations WHERE id=? AND status='active'",
-                (req.organization_id,),
+                (organization_id,),
             ).fetchone()
             if not org:
                 raise HTTPException(status_code=400, detail="Dealer organization is unavailable")
             if backend_name() == "supabase-postgres":
                 farm = conn.execute(
                     "INSERT INTO farms(farm_key,farm_name,producer_name,state,county,organization_id,default_row_spacing,default_planting_window) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
-                    (farm_key, farm_name, main_contact, state, county, req.organization_id, "NORMAL", "NORMAL"),
+                    (farm_key, farm_name, main_contact, state, county, organization_id, "NORMAL", "NORMAL"),
                 ).fetchone()
                 farm_id = int(farm["id"])
                 prospect = conn.execute(
                     "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json,organization_id) VALUES(?,?,?,?,?,'[]'::jsonb,'{\"created_from\":\"scratch\"}'::jsonb,?) RETURNING id",
-                    (farm_id, farm_name, "new", "manual_create", 0, req.organization_id),
+                    (farm_id, farm_name, "new", "manual_create", 0, organization_id),
                 ).fetchone()
                 prospect_id = int(prospect["id"])
             else:

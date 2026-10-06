@@ -86,3 +86,73 @@ def is_valid_production_record(record: dict[str, Any]) -> bool:
         return False
 
     return True
+
+
+def collapse_production_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return at most one valid production observation per field/crop/year.
+
+    If multiple source units legitimately contribute to one mapped management
+    field in the same crop year, combine them using planted-acre weighted yield
+    when acreage is available. Invalid/excluded/placeholder rows are ignored.
+    """
+    groups: dict[tuple[int, str], list[dict[str, Any]]] = {}
+    for record in records:
+        if not is_valid_production_record(record):
+            continue
+        year = int(record["crop_year"])
+        crop = normalize_crop(record.get("crop"))
+        groups.setdefault((year, crop), []).append(record)
+
+    collapsed: list[dict[str, Any]] = []
+    for (year, crop), rows in sorted(groups.items()):
+        base = dict(rows[-1])
+        weights = []
+        for row in rows:
+            try:
+                acres = float(row.get("planted_acres") or 0)
+            except (TypeError, ValueError):
+                acres = 0.0
+            try:
+                yld = float(row.get("yield_value"))
+            except (TypeError, ValueError):
+                continue
+            weights.append((max(acres, 0.0), yld))
+
+        weighted_den = sum(a for a, _ in weights if a > 0)
+        if weighted_den > 0:
+            combined_yield = sum(a * y for a, y in weights if a > 0) / weighted_den
+            combined_acres = weighted_den
+        else:
+            ys = [y for _, y in weights]
+            combined_yield = sum(ys) / len(ys)
+            combined_acres = None
+
+        approved = []
+        for row in rows:
+            try:
+                value = float(row.get("approved_yield"))
+            except (TypeError, ValueError):
+                continue
+            try:
+                acres = float(row.get("planted_acres") or 0)
+            except (TypeError, ValueError):
+                acres = 0.0
+            approved.append((max(acres, 0.0), value))
+        approved_yield = None
+        if approved:
+            aden = sum(a for a, _ in approved if a > 0)
+            approved_yield = (
+                sum(a * y for a, y in approved if a > 0) / aden
+                if aden > 0 else sum(y for _, y in approved) / len(approved)
+            )
+
+        base["crop_year"] = year
+        base["crop"] = crop
+        base["yield_value"] = round(combined_yield, 4)
+        if combined_acres is not None:
+            base["planted_acres"] = round(combined_acres, 4)
+        if approved_yield is not None:
+            base["approved_yield"] = round(approved_yield, 4)
+        base["_source_record_count"] = len(rows)
+        collapsed.append(base)
+    return collapsed

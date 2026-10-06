@@ -324,9 +324,9 @@ def prospect_soil_status(prospect_id: int) -> dict[str, Any]:
         prospect = conn.execute("SELECT * FROM prospects WHERE id=?", (prospect_id,)).fetchone()
         if not prospect:
             raise KeyError(f"Prospect {prospect_id} not found")
-        rows = conn.execute("SELECT f.id AS field_id,f.name,f.acres,f.county,f.state,f.farm_number,f.tract_number,f.field_number,fl.source AS location_source,fl.source_reference,fl.township_range,fl.section,fl.boundary_geojson,fl.centroid_lat,fl.centroid_lon,fl.confidence,fs.status AS soil_status,fs.total_area_acres,fs.dominant_musym,fs.dominant_muname,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fs.hydrologic_group_summary_json FROM fields f LEFT JOIN field_locations fl ON fl.field_id=f.id LEFT JOIN field_soils fs ON fs.field_id=f.id WHERE f.farm_id=? ORDER BY f.name", (prospect["farm_id"],)).fetchall()
+        rows = conn.execute("SELECT f.id AS field_id,f.name,f.acres,f.county,f.state,f.farm_number,f.tract_number,f.field_number,f.metadata_json,fl.source AS location_source,fl.source_reference,fl.township_range,fl.section,fl.boundary_geojson,fl.centroid_lat,fl.centroid_lon,fl.confidence,fs.status AS soil_status,fs.total_area_acres,fs.dominant_musym,fs.dominant_muname,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fs.hydrologic_group_summary_json FROM fields f LEFT JOIN field_locations fl ON fl.field_id=f.id LEFT JOIN field_soils fs ON fs.field_id=f.id WHERE f.farm_id=? ORDER BY f.name", (prospect["farm_id"],)).fetchall()
     result = rows_to_dicts(rows)
     for row in result:
-        for key in ("boundary_geojson","drainage_summary_json","hydrologic_group_summary_json"):
+        for key in ("boundary_geojson","drainage_summary_json","hydrologic_group_summary_json","metadata_json"):
             row[key] = _loads(row.get(key), {} if key != "boundary_geojson" else None)
     return {"prospect_id": prospect_id, "farm_id": int(prospect["farm_id"]), "fields": result}

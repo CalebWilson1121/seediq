@@ -134,6 +134,33 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
         practice = _practice_bucket(md.get("practice"))
         candidates: list[dict[str, Any]] = []
 
+        soi = md.get("soi_crosswalk") if isinstance(md.get("soi_crosswalk"), dict) else None
+        if soi and soi.get("field_ids"):
+            selected_acres = float(soi.get("selected_acres") or 0)
+            diff = selected_acres - target if target else 0.0
+            pct = abs(diff) / max(target, 1.0) * 100.0 if target else 0.0
+            candidates.append({
+                "field_ids": [int(x) for x in (soi.get("field_ids") or [])],
+                "field_names": soi.get("field_names") or [],
+                "field_root": "Mapped SOI identity",
+                "selected_acres": round(selected_acres, 2),
+                "aph_acres": round(target, 2) if target else None,
+                "variance_acres": round(diff, 2),
+                "variance_pct": round(pct, 2),
+                "score": 120.0 if soi.get("status") == "high" else 90.0,
+                "acreage_score": 100.0 if soi.get("status") == "high" else 75.0,
+                "name_similarity": float(soi.get("name_similarity") or 0),
+                "aph_management_name": (soi.get("management_names") or [None])[0],
+                "identity_aliases": soi.get("management_names") or [],
+                "crop": crop,
+                "practice": practice,
+                "reason": "Mapped SOI identity → exact SeedIQ field crosswalk"
+                    + (f"; spatial overlap {float(soi.get('max_overlap_pct') or 0):.0f}%" if soi.get("max_overlap_pct") is not None else ""),
+                "source": "mapped_soi_crosswalk",
+                "reference_geojson": soi.get("reference_geojson"),
+                "soi_status": soi.get("status"),
+            })
+
         if target > 0:
             for g in groups:
                 if practice != "UNKNOWN" and g["practice"] != practice:
@@ -200,8 +227,15 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                     ),
                 })
 
-        candidates.sort(key=lambda x: (-x["score"], abs(x["variance_acres"]), len(x["field_ids"]), x["field_root"]))
-        candidate_map[int(m["id"])] = candidates[:8]
+        deduped = []
+        seen_groups = set()
+        for candidate in sorted(candidates, key=lambda x: (-x["score"], abs(x["variance_acres"]), len(x["field_ids"]), x["field_root"])):
+            key = tuple(sorted(int(x) for x in candidate.get("field_ids") or []))
+            if not key or key in seen_groups:
+                continue
+            seen_groups.add(key)
+            deduped.append(candidate)
+        candidate_map[int(m["id"])] = deduped[:8]
 
     # Avoid assigning the same mapped group to two APH units within the same
     # crop/practice. We resolve the most exact/unique acreage matches first.
@@ -247,10 +281,12 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
             name_similarity = float(chosen.get("name_similarity") or 0)
             aph_name = str(chosen.get("aph_management_name") or "")
             generic_aph_name = _field_root(aph_name) in {"", "other ident", "other", "unknown", "nau unit"}
+            if chosen.get("source") == "mapped_soi_crosswalk":
+                confidence = "high" if chosen.get("soi_status") == "high" else "review"
             # Safety rule: acreage-only matches are suggestions, never automatic
             # confirmations. High/medium requires corroborating management name
             # (including an alias learned from a prior dealer confirmation).
-            if name_similarity >= 0.90 and (abs_diff <= 10.0 or pct <= 12.0):
+            elif name_similarity >= 0.90 and (abs_diff <= 10.0 or pct <= 12.0):
                 confidence = "high"
             elif name_similarity >= 0.60 and (abs_diff <= 8.0 or pct <= 8.0):
                 confidence = "medium"

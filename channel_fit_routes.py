@@ -262,18 +262,23 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
             "WHERE cr.field_id=? AND upper(cr.crop)=? AND cr.yield_value IS NOT NULL ORDER BY cr.crop_year",
             (field_id, field_id, crop),
         ).fetchall())
-        linked = rows_to_dicts(conn.execute(
-            "SELECT cr.crop_year,cr.yield_value,e.precipitation_in,e.heat_days_95,e.heat_days_90 "
+        linked_raw = rows_to_dicts(conn.execute(
+            "SELECT cr.crop_year,cr.yield_value,cr.metadata_json,m.unit_key,"
+            "e.precipitation_in,e.heat_days_95,e.heat_days_90 "
             "FROM aph_unit_field_links l "
             "JOIN aph_unit_matches m ON m.id=l.match_id "
             "JOIN crop_records cr ON cr.source_document_id=m.source_document_id "
             "LEFT JOIN field_year_environment e ON e.field_id=l.field_id AND e.crop_year=cr.crop_year "
             "WHERE l.field_id=? AND m.match_status='confirmed' AND upper(cr.crop)=? "
             "AND cr.yield_value IS NOT NULL "
-            "AND COALESCE(cr.metadata_json->>'unit_number','')=m.unit_key "
             "ORDER BY cr.crop_year",
             (field_id, crop),
         ).fetchall())
+        linked=[]
+        for rec in linked_raw:
+            meta=_loads(rec.get("metadata_json"), {})
+            if str(meta.get("unit_number") or "") == str(rec.get("unit_key") or ""):
+                linked.append(rec)
         seen=set()
         rows=[]
         for r in direct+linked:

@@ -14,13 +14,18 @@ from shapely.ops import transform, unary_union
 
 from models import ParsedDocument, ParsedField, SourceFact
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 FIELD_RE = re.compile(
     r"f(?P<nau>\d+)\s+F(?P<farm>\d+)-T(?P<tract>\d+)-(?P<field>\d+)\s+(?P<acres>[0-9.]+)A",
     re.I,
 )
 LEGAL_RE = re.compile(r"\b(?P<section>\d{4})-(?P<tr>\d{3}[NS]\d{3}[EW])\b", re.I)
+UNIT_RE = re.compile(r"\b(\d{4}-\d{4}-\d{3})\b")
+PRACTICE_RE = re.compile(
+    r"\b(NFAC-(?:NIRR|IRR)/(?:NTS|GSG)|NON\s+IRR/(?:NTS|GSG)|IRRIGATED/(?:NTS|GSG)|NIRR/(?:NTS|GSG)|IRR/(?:NTS|GSG))\b",
+    re.I,
+)
 
 
 @dataclass
@@ -31,6 +36,8 @@ class _FieldEntry:
     field: str
     acres: float
     crop: str | None
+    practice: str | None
+    unit_number: str | None
     common_name: str | None
     page: int
     section: str
@@ -76,6 +83,20 @@ def _crop_before(text: str, pos: int) -> str | None:
     return "SOYBEANS" if crop.startswith("SOY") else "CORN"
 
 
+def _unit_before(text: str, pos: int) -> str | None:
+    pre = text[max(0, pos - 2400):pos]
+    units = UNIT_RE.findall(pre)
+    return units[-1] if units else None
+
+
+def _practice_before(text: str, pos: int) -> str | None:
+    pre = text[max(0, pos - 2400):pos]
+    practices = PRACTICE_RE.findall(pre)
+    if not practices:
+        return None
+    return re.sub(r"\s+", " ", practices[-1].upper()).strip()
+
+
 def _common_name_after(text: str, pos: int) -> str | None:
     tail = text[pos:pos + 650]
     m = re.search(r"Farm Name:\s*([^\n]*)", tail, re.I)
@@ -95,6 +116,8 @@ def _field_entries(group_text: str, page_number: int, section: str, township_ran
         re.I | re.S,
     ):
         crop = _crop_before(group_text, block.start())
+        practice = _practice_before(group_text, block.start())
+        unit_number = _unit_before(group_text, block.start())
         common_name = _common_name_after(group_text, block.end())
         for fm in FIELD_RE.finditer(block.group(1)):
             g = fm.groupdict()
@@ -106,6 +129,8 @@ def _field_entries(group_text: str, page_number: int, section: str, township_ran
                 field=g["field"],
                 acres=float(g["acres"]),
                 crop=crop,
+                practice=practice,
+                unit_number=unit_number,
                 common_name=common_name,
                 page=page_number,
                 section=section,
@@ -125,6 +150,8 @@ def _field_entries(group_text: str, page_number: int, section: str, township_ran
                 field=g["field"],
                 acres=float(g["acres"]),
                 crop=_crop_before(group_text, fm.start()),
+                practice=_practice_before(group_text, fm.start()),
+                unit_number=_unit_before(group_text, fm.start()),
                 common_name=_common_name_after(group_text, fm.end()),
                 page=page_number,
                 section=section,
@@ -390,6 +417,10 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 "legal_section": entry.section,
                 "township_range": entry.township_range,
                 "insurance_data_scrubbed": True,
+                "insurance_unit_number": entry.unit_number,
+                "source_crop": entry.crop,
+                "source_practice": entry.practice,
+                "unit_identity_source": "NAU Mapped SOI",
                 "geometry_status": "reference_missing",
                 "geometry_authoritative": False,
             }
@@ -418,7 +449,7 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                     tract_number=entry.tract,
                     field_number=entry.field,
                     crop=None,
-                    practice=None,
+                    practice=entry.practice,
                     irrigation=None,
                     metadata=metadata,
                 )
@@ -431,6 +462,9 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 ("legal_section", entry.section),
                 ("township_range", entry.township_range),
                 ("source_field_location_id", entry.nau_id),
+                ("insurance_unit_number", entry.unit_number),
+                ("source_crop", entry.crop),
+                ("source_practice", entry.practice),
             ):
                 out.facts.append(SourceFact("mapped_soi_field", entity_key, field_name, value, source_locator=f"page:{entry.page}", confidence=1.0))
     out.fields = list(parsed_fields.values())
@@ -440,5 +474,5 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
         out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities; {geometry_matches} received raster-georeferenced reference shapes. Reference shapes are locators only and are not promoted to authoritative SeedIQ boundaries.")
     else:
         out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes. SeedIQ requires exact MBAR/GIS or confirmed manual geometry before soil and production recommendations use a boundary.")
-    out.warnings.append("Insurance coverage, premium, liability, yield, policy election and unit data were intentionally excluded from normalized SeedIQ output.")
+    out.warnings.append("Insurance financial/election data was intentionally excluded. Unit number is retained only as a field-identity bridge for APH matching.")
     return out

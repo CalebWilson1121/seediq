@@ -15,7 +15,7 @@ from aph_utils import aph_identity, practice_bucket
 from database import backend_name, connect, json_dumps
 from models import ParsedDocument
 from parsers import PARSER_VERSION, parse_document
-from soi_identity_service import store_soi_identities, suggest_exact_fields_for_aph
+from soi_identity_service import store_soi_identities, suggest_exact_fields_for_aph, refresh_existing_aph_crosswalks
 
 UPLOAD_DIR = Path(__file__).with_name("uploads")
 
@@ -512,6 +512,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
         field_boundaries: list[tuple[int, dict]] = []
         aph_units_parsed = 0
         soi_identities_stored = 0
+        soi_crosswalk_refresh = None
         map_first_aph = parsed.document_type == "APH" and target_farm_id is not None
         exact_field_count = int(conn.execute(
             "SELECT COUNT(*) AS n FROM field_locations fl JOIN fields f ON f.id=fl.field_id "
@@ -527,6 +528,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             field_id_by_key, aph_units_parsed = _prepare_aph_map_first(conn, farm_id, document_id, parsed)
         elif soi_identity_only:
             soi_identities_stored = store_soi_identities(conn, farm_id, document_id, parsed)
+            soi_crosswalk_refresh = refresh_existing_aph_crosswalks(conn, farm_id)
         else:
             for i, f in enumerate(parsed.fields):
                 key_parts = [str(x or "") for x in [f.farm_number, f.tract_number, f.field_number]]
@@ -595,4 +597,4 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             except Exception as exc:
                 parsed.warnings.append(f"Field {field_id} boundary could not be saved: {exc}")
 
-    return {"duplicate": False, "reprocessed": bool(existing and reprocess), "document_id": document_id, "farm_id": farm_id, "prospect_id": prospect_id, "document_type": parsed.document_type, "parser": parser_name, "fields_created_or_updated": (0 if (map_first_aph or soi_identity_only) else len(parsed.fields)), "soi_identities_stored": soi_identities_stored, "aph_units_parsed": aph_units_parsed, "crop_records_created": len(parsed.crop_records), "facts_stored": len(parsed.facts), "warnings": parsed.warnings, "storage": stored_path, "database": backend_name()}
+    return {"duplicate": False, "reprocessed": bool(existing and reprocess), "document_id": document_id, "farm_id": farm_id, "prospect_id": prospect_id, "document_type": parsed.document_type, "parser": parser_name, "fields_created_or_updated": (0 if (map_first_aph or soi_identity_only) else len(parsed.fields)), "soi_identities_stored": soi_identities_stored, "soi_crosswalk_refresh": soi_crosswalk_refresh, "aph_units_parsed": aph_units_parsed, "crop_records_created": len(parsed.crop_records), "facts_stored": len(parsed.facts), "warnings": parsed.warnings, "storage": stored_path, "database": backend_name()}

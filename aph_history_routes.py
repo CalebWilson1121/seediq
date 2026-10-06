@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
+from itertools import combinations
 from statistics import mean
 from typing import Any
 
@@ -27,6 +29,172 @@ def _loads(value: Any, default):
         return json.loads(value)
     except Exception:
         return default
+
+
+
+def _practice_bucket(value: Any) -> str:
+    s = str(value or "").upper().replace("-", "").replace(" ", "")
+    if "NIRR" in s or "NONIRR" in s:
+        return "NIRR"
+    if "IRR" in s:
+        return "IRR"
+    return s or "UNKNOWN"
+
+
+def _field_root(name: Any) -> str:
+    s = str(name or "").strip().lower()
+    s = re.sub(r"\s+new(?:\s+\d+)?$", "", s)
+    s = re.sub(r"\s*\(\d+\)\s*$", "", s)
+    s = re.sub(r"\b(?:irr|nirr|irrigated|non\s*irr(?:igated)?)\b", " ", s)
+    s = re.sub(r"\b\d+\b", " ", s)
+    s = re.sub(r"[^a-z]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip() or str(name or "").strip().lower()
+
+
+def _candidate_subsets(group: list[dict[str, Any]], target: float) -> list[tuple[list[dict[str, Any]], float]]:
+    # MBAR often breaks one management field into several polygons with the same
+    # base name. Exhaustive subsets are safe here because name groups are small.
+    out: list[tuple[list[dict[str, Any]], float]] = []
+    n = len(group)
+    max_size = min(n, 8)
+    if n <= 12:
+        for r in range(1, max_size + 1):
+            for combo in combinations(group, r):
+                total = sum(float(x.get("acres") or 0) for x in combo)
+                out.append((list(combo), total))
+    else:
+        # Fallback for unusually fragmented source maps: beam-search by acreage.
+        states: list[tuple[list[dict[str, Any]], float]] = [([], 0.0)]
+        for fld in group:
+            nxt = states + [(items + [fld], total + float(fld.get("acres") or 0)) for items, total in states if len(items) < max_size]
+            nxt.sort(key=lambda z: abs(z[1] - target))
+            states = nxt[:250]
+        out.extend((items, total) for items, total in states if items)
+    return out
+
+
+def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
+    with connect() as conn:
+        matches = rows_to_dicts(conn.execute(
+            "SELECT * FROM aph_unit_matches WHERE farm_id=? ORDER BY id",
+            (farm_id,),
+        ).fetchall())
+        fields = rows_to_dicts(conn.execute(
+            "SELECT f.id,f.name,f.acres,f.irrigation,f.practice,f.farm_number,f.tract_number,f.field_number,"
+            "fl.centroid_lat,fl.centroid_lon FROM fields f "
+            "LEFT JOIN field_locations fl ON fl.field_id=f.id WHERE f.farm_id=? ORDER BY f.name",
+            (farm_id,),
+        ).fetchall())
+
+    groups: dict[tuple[str,str], list[dict[str, Any]]] = {}
+    for fld in fields:
+        fld["practice_bucket"] = _practice_bucket(fld.get("irrigation") or fld.get("practice"))
+        fld["name_root"] = _field_root(fld.get("name"))
+        groups.setdefault((fld["practice_bucket"], fld["name_root"]), []).append(fld)
+
+    candidate_map: dict[int, list[dict[str, Any]]] = {}
+    for m in matches:
+        md = _loads(m.get("metadata_json"), {})
+        target = float(md.get("aph_acres") or 0)
+        crop = str(md.get("crop") or "").upper()
+        practice = _practice_bucket(md.get("practice"))
+        if target <= 0:
+            candidate_map[int(m["id"])] = []
+            continue
+
+        candidates: list[dict[str, Any]] = []
+        for (bucket, root), group in groups.items():
+            if practice != "UNKNOWN" and bucket != practice:
+                continue
+            for combo, total in _candidate_subsets(group, target):
+                diff = total - target
+                abs_diff = abs(diff)
+                pct = abs_diff / max(target, 1.0)
+                if pct > 0.12 and abs_diff > 5.0:
+                    continue
+                same_root = len({_field_root(x.get("name")) for x in combo}) == 1
+                acreage_points = max(0.0, 70.0 - pct * 900.0)
+                root_points = 18.0 if same_root else 0.0
+                practice_points = 8.0 if practice == bucket else 0.0
+                exact_points = 4.0 if pct <= 0.005 else (2.0 if pct <= 0.015 else 0.0)
+                score = round(min(100.0, acreage_points + root_points + practice_points + exact_points), 1)
+                candidates.append({
+                    "field_ids": [int(x["id"]) for x in combo],
+                    "field_names": [x.get("name") for x in combo],
+                    "field_root": root,
+                    "selected_acres": round(total, 2),
+                    "aph_acres": round(target, 2),
+                    "variance_acres": round(diff, 2),
+                    "variance_pct": round(pct * 100.0, 2),
+                    "score": score,
+                    "crop": crop,
+                    "practice": practice,
+                    "reason": f"{root or 'field group'} polygons total {total:.2f} ac vs APH {target:.2f} ac",
+                })
+        # Deduplicate exact field sets, best score first.
+        unique: dict[tuple[int,...], dict[str, Any]] = {}
+        for cand in sorted(candidates, key=lambda x: (-x["score"], abs(x["variance_acres"]), len(x["field_ids"]))):
+            key = tuple(sorted(cand["field_ids"]))
+            unique.setdefault(key, cand)
+        candidate_map[int(m["id"])] = list(unique.values())[:12]
+
+    # Global pass: within the same crop+practice, do not hand the same mapped
+    # field to two different APH units. Across crops, reuse is valid for rotation.
+    allocated: dict[tuple[str,str], set[int]] = {}
+    ordered = []
+    for m in matches:
+        md = _loads(m.get("metadata_json"), {})
+        cands = candidate_map.get(int(m["id"]), [])
+        margin = (cands[0]["score"] - cands[1]["score"]) if len(cands) > 1 else (cands[0]["score"] if cands else 0)
+        ordered.append((-(cands[0]["score"] if cands else 0), -margin, int(m["id"]), m, md))
+    ordered.sort()
+
+    suggestions: dict[int, dict[str, Any] | None] = {}
+    for _, _, mid, m, md in ordered:
+        crop = str(md.get("crop") or "").upper()
+        practice = _practice_bucket(md.get("practice"))
+        bucket = (crop, practice)
+        used = allocated.setdefault(bucket, set())
+        chosen = None
+        for cand in candidate_map.get(mid, []):
+            ids = set(cand["field_ids"])
+            if not (ids & used):
+                chosen = cand
+                break
+        if chosen:
+            used.update(chosen["field_ids"])
+        suggestions[mid] = chosen
+
+    result = []
+    for m in matches:
+        md = _loads(m.get("metadata_json"), {})
+        chosen = suggestions.get(int(m["id"]))
+        confidence = "none"
+        if chosen:
+            if chosen["score"] >= 92 and chosen["variance_pct"] <= 1.5:
+                confidence = "high"
+            elif chosen["score"] >= 75 and chosen["variance_pct"] <= 4.0:
+                confidence = "medium"
+            else:
+                confidence = "review"
+        result.append({
+            "match_id": int(m["id"]),
+            "unit_key": m.get("unit_key"),
+            "crop": md.get("crop"),
+            "practice": md.get("practice"),
+            "aph_acres": md.get("aph_acres"),
+            "suggestion": chosen,
+            "confidence": confidence,
+            "alternatives": candidate_map.get(int(m["id"]), [])[:5],
+        })
+
+    return {
+        "farm_id": farm_id,
+        "suggestions": result,
+        "high_confidence_count": sum(1 for x in result if x["confidence"] == "high"),
+        "medium_confidence_count": sum(1 for x in result if x["confidence"] == "medium"),
+        "needs_review_count": sum(1 for x in result if x["confidence"] not in {"high","medium"}),
+    }
 
 
 def _unit_from_record(record: dict[str, Any]) -> str | None:
@@ -126,6 +294,67 @@ def _enrich_weather_for_field(field_id: int) -> dict[str, Any]:
     for year in years:
         results.append({"crop_year": year, **_weather_for_field_year(field_id, year)})
     return {"field_id": field_id, "years": results}
+
+
+@router.get("/api/farms/{farm_id}/aph-auto-match")
+def aph_auto_match(farm_id: int):
+    return _aph_auto_suggestions(farm_id)
+
+
+class AutoConfirmRequest(BaseModel):
+    include_medium: bool = False
+
+
+@router.post("/api/farms/{farm_id}/aph-auto-match/confirm")
+def aph_auto_confirm(farm_id: int, req: AutoConfirmRequest):
+    plan = _aph_auto_suggestions(farm_id)
+    accepted = []
+    skipped = []
+    for item in plan["suggestions"]:
+        allowed = item["confidence"] == "high" or (req.include_medium and item["confidence"] == "medium")
+        suggestion = item.get("suggestion")
+        if not allowed or not suggestion:
+            skipped.append({"match_id": item["match_id"], "confidence": item["confidence"]})
+            continue
+        match_id = int(item["match_id"])
+        field_ids = [int(x) for x in suggestion["field_ids"]]
+        with connect() as conn:
+            match = conn.execute("SELECT * FROM aph_unit_matches WHERE id=? AND farm_id=?", (match_id, farm_id)).fetchone()
+            if not match:
+                continue
+            conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
+            for fid in field_ids:
+                conn.execute(
+                    "INSERT INTO aph_unit_field_links(match_id,field_id) VALUES(?,?) ON CONFLICT(match_id,field_id) DO NOTHING",
+                    (match_id, fid),
+                )
+            primary = field_ids[0] if len(field_ids) == 1 else None
+            conn.execute(
+                "UPDATE aph_unit_matches SET field_id=?,match_status='confirmed',confidence=?,method='auto_group_match',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (primary, float(suggestion["score"]) / 100.0, match_id),
+            )
+            recs = rows_to_dicts(conn.execute(
+                "SELECT id,metadata_json FROM crop_records WHERE source_document_id=?",
+                (match["source_document_id"],),
+            ).fetchall())
+            for rec in recs:
+                if _unit_from_record(rec) == str(match["unit_key"]):
+                    conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
+        accepted.append({
+            "match_id": match_id,
+            "unit_key": item["unit_key"],
+            "field_ids": field_ids,
+            "selected_acres": suggestion["selected_acres"],
+            "aph_acres": suggestion["aph_acres"],
+            "confidence": item["confidence"],
+        })
+    return {
+        "farm_id": farm_id,
+        "accepted": accepted,
+        "accepted_count": len(accepted),
+        "skipped": skipped,
+        "message": "Auto-matches saved. Run historical weather refresh after reviewing remaining units.",
+    }
 
 
 @router.get("/api/farms/{farm_id}/aph-matches")

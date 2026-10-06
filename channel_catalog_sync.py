@@ -13,6 +13,113 @@ from database import connect, json_dumps
 router = APIRouter()
 
 BAYER_BASE = "https://www.cropscience.bayer.us"
+
+BAYER_BFF = "https://bff.us-east-1.farmer.bayer.com"
+PRODUCT_QUERY = """
+query GetSeedProducts($params: SeedCatalogParams!, $pagination: ProductPagination!, $location: LocationParams!) {
+  getSeedProducts(params: $params, pagination: $pagination, location: $location) {
+    total
+    products {
+      chu
+      chuMin
+      chuMax
+      adaptedForRegion
+      productClassName
+      cropType
+      hybridPrefix
+      hybridSuffix
+      imageUrl
+      daysToFlower
+      maturity
+      maturitySort
+      newProduct
+      seoSlug
+      silageProven
+      silageReady
+      strengthsAndManagement
+      trait
+      hybridQualities
+      characteristics {
+        type
+        label
+        items {
+          characteristicId
+          characteristicName
+          value
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _graphql_product_page(crop: str, offset: int = 0, size: int = 100) -> dict[str, Any]:
+    variables = {
+        "params": {
+            "brand": "CHANNEL",
+            "crop": crop,
+            "productName": None,
+            "filters": [],
+            "limitedRelease": True,
+        },
+        "pagination": {"from": offset, "size": size},
+        "location": {"locale": "US", "region": None},
+    }
+    headers = dict(HEADERS)
+    headers.update({"Content-Type": "application/json", "Authorization": "Bearer token"})
+    try:
+        r = httpx.post(
+            f"{BAYER_BFF}/graphql",
+            headers=headers,
+            json={"query": PRODUCT_QUERY, "variables": variables},
+            timeout=30.0,
+            follow_redirects=True,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Bayer GraphQL request failed: {exc}") from exc
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Bayer GraphQL returned HTTP {r.status_code}: {r.text[:300]}")
+    try:
+        payload = r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Bayer GraphQL returned invalid JSON") from exc
+    if payload.get("errors"):
+        raise HTTPException(status_code=502, detail=f"Bayer GraphQL error: {payload['errors'][:1]}")
+    data = ((payload.get("data") or {}).get("getSeedProducts") or {})
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Bayer GraphQL response missing getSeedProducts")
+    return data
+
+
+def _graphql_all_products(crop: str, size: int = 100) -> tuple[list[dict[str, Any]], int]:
+    first = _graphql_product_page(crop, 0, size)
+    total = int(first.get("total") or 0)
+    products = list(first.get("products") or [])
+    offset = len(products)
+    while offset < total:
+        page = _graphql_product_page(crop, offset, size)
+        rows = list(page.get("products") or [])
+        if not rows:
+            break
+        products.extend(rows)
+        offset += len(rows)
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in products:
+        slug = str(row.get("seoSlug") or "")
+        key = slug or f"{row.get('hybridPrefix')}|{row.get('hybridSuffix')}"
+        deduped[key] = row
+    return list(deduped.values()), total
+
+
+def _prepare_graphql_product(raw: dict[str, Any]) -> dict[str, Any]:
+    row = dict(raw)
+    prefix = str(row.get("hybridPrefix") or "").strip()
+    suffix = str(row.get("hybridSuffix") or "").strip()
+    row["title"] = " ".join(x for x in (prefix, suffix) if x).strip()
+    if not row["title"]:
+        row["title"] = str(row.get("seoSlug") or "").strip()
+    return row
 HEADERS = {
     "User-Agent": "SeedIQCatalogSync/1.0 (+https://seediq-w5-3abe.vercel.app)",
     "Accept-Language": "en-US,en;q=0.9",
@@ -172,6 +279,17 @@ def _normalized(raw: dict[str, Any], crop: str) -> dict[str, Any]:
         "new_product": bool(raw.get("newProduct")),
         "sync_method": "__NEXT_DATA__ catalog pagination",
         "raw_strengths": strengths,
+        "hybrid_qualities": raw.get("hybridQualities"),
+        "characteristics": raw.get("characteristics"),
+        "adapted_for_region": raw.get("adaptedForRegion"),
+        "product_class_name": raw.get("productClassName"),
+        "crop_type": raw.get("cropType"),
+        "days_to_flower": raw.get("daysToFlower"),
+        "silage_proven": raw.get("silageProven"),
+        "silage_ready": raw.get("silageReady"),
+        "chu": raw.get("chu"),
+        "chu_min": raw.get("chuMin"),
+        "chu_max": raw.get("chuMax"),
     }
     return {
         "product_name": title,
@@ -273,21 +391,40 @@ def channel_catalog_client_discovery():
 
 
 # Temporary operator endpoint used to seed the live catalog. Remove/lock down after sync.
+@router.get("/api/admin/channel-graphql-probe")
+def channel_graphql_probe(crop: str = "CORN"):
+    crop = crop.upper()
+    if crop not in {"CORN", "SOYBEANS"}:
+        raise HTTPException(status_code=400, detail="crop must be CORN or SOYBEANS")
+    data = _graphql_product_page(crop, 0, 3)
+    return {
+        "crop": crop,
+        "total": data.get("total"),
+        "sample": [_prepare_graphql_product(x) for x in (data.get("products") or [])],
+    }
+
+
 @router.get("/api/admin/channel-catalog-sync-once")
 def channel_catalog_sync_once(organization_id: int = 2, catalog_id: int = 1, crop_year: int = 2027):
-    corn_raw, corn_pages = _crawl_crop("corn")
-    soy_raw, soy_pages = _crawl_crop("soybeans")
-    corn = [_normalized(x, "CORN") for x in corn_raw]
-    soy = [_normalized(x, "SOYBEANS") for x in soy_raw]
+    corn_raw, corn_total = _graphql_all_products("CORN")
+    soy_raw, soy_total = _graphql_all_products("SOYBEANS")
+    corn = [_normalized(_prepare_graphql_product(x), "CORN") for x in corn_raw]
+    soy = [_normalized(_prepare_graphql_product(x), "SOYBEANS") for x in soy_raw]
+    if len(corn) != corn_total or len(soy) != soy_total:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Incomplete Bayer catalog response: corn {len(corn)}/{corn_total}, soybeans {len(soy)}/{soy_total}",
+        )
     sync = _sync_rows(corn + soy, organization_id, catalog_id, crop_year)
     return {
         "organization_id": organization_id,
         "catalog_id": catalog_id,
         "crop_year": crop_year,
         "corn_products": len(corn),
+        "corn_bayer_total": corn_total,
         "soybean_products": len(soy),
+        "soybean_bayer_total": soy_total,
         "total_products": len(corn) + len(soy),
         **sync,
-        "corn_pages": corn_pages,
-        "soybean_pages": soy_pages,
+        "source": f"{BAYER_BFF}/graphql",
     }

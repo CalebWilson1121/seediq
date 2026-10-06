@@ -304,3 +304,119 @@ def suggest_exact_fields_for_aph(conn, farm_id: int, parsed_field) -> dict[str, 
         "max_overlap_pct": max_overlap,
         "name_similarity": round(best_name, 3),
     }
+
+
+class _APHProxy:
+    def __init__(self, metadata: dict[str, Any]):
+        self.metadata = metadata
+        self.crop = metadata.get("crop")
+        self.practice = metadata.get("practice")
+        self.irrigation = metadata.get("practice")
+        self.field_number = metadata.get("unit_number")
+        self.name = metadata.get("farm_name") or metadata.get("management_name") or metadata.get("unit_number")
+        self.acres = metadata.get("aph_acres")
+        self.county = metadata.get("county")
+
+
+def refresh_existing_aph_crosswalks(conn, farm_id: int) -> dict[str, Any]:
+    """Re-evaluate non-manual APH matches after a mapped SOI identity upload.
+
+    This lets dealers upload APH and mapped SOI in either order. Manual dealer
+    confirmations are preserved.
+    """
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM aph_unit_matches WHERE farm_id=? ORDER BY source_document_id,id",
+        (farm_id,),
+    ).fetchall()]
+    if not rows:
+        return {"evaluated": 0, "confirmed": 0, "review": 0, "preserved_manual": 0}
+
+    preserved_manual = 0
+    proposals = []
+    for row in rows:
+        method = str(row.get("method") or "")
+        if method.startswith("manual_"):
+            preserved_manual += 1
+            continue
+        md = _loads(row.get("metadata_json"), {})
+        suggestion = suggest_exact_fields_for_aph(conn, farm_id, _APHProxy(md))
+        md["soi_crosswalk"] = suggestion
+        conn.execute(
+            "UPDATE aph_unit_matches SET metadata_json=?::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (json_dumps(md), row["id"]),
+        )
+        if suggestion and suggestion.get("status") == "high" and suggestion.get("field_ids"):
+            proposals.append((row, md, suggestion))
+
+    # Reserve fields already manually confirmed in the same crop/practice.
+    used: dict[tuple[str, str], set[int]] = {}
+    for row in rows:
+        if not str(row.get("method") or "").startswith("manual_") or row.get("match_status") != "confirmed":
+            continue
+        md = _loads(row.get("metadata_json"), {})
+        bucket = (str(md.get("crop") or "").upper(), practice_bucket(md.get("practice")))
+        links = conn.execute(
+            "SELECT field_id FROM aph_unit_field_links WHERE match_id=?",
+            (row["id"],),
+        ).fetchall()
+        used.setdefault(bucket, set()).update(int(x["field_id"]) for x in links)
+
+    proposals.sort(key=lambda item: (
+        float(item[2].get("acre_variance_pct") or 0),
+        -float(item[2].get("name_similarity") or 0),
+        int(item[0]["id"]),
+    ))
+
+    confirmed = 0
+    review = 0
+    proposed_ids = {int(row["id"]) for row, _, _ in proposals}
+    for row, md, suggestion in proposals:
+        bucket = (str(md.get("crop") or "").upper(), practice_bucket(md.get("practice")))
+        field_ids = sorted({int(x) for x in suggestion.get("field_ids") or []})
+        busy = used.setdefault(bucket, set())
+        if any(fid in busy for fid in field_ids):
+            suggestion["status"] = "review"
+            suggestion["conflict_reason"] = "Exact field already assigned to another APH unit for this crop/practice"
+            md["soi_crosswalk"] = suggestion
+            conn.execute(
+                "UPDATE aph_unit_matches SET field_id=NULL,match_status='unmatched',confidence=?,method='needs_confirmation',metadata_json=?::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (0.0, json_dumps(md), row["id"]),
+            )
+            conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (row["id"],))
+            review += 1
+            continue
+        conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (row["id"],))
+        for fid in field_ids:
+            conn.execute(
+                "INSERT INTO aph_unit_field_links(match_id,field_id) VALUES(?,?) ON CONFLICT(match_id,field_id) DO NOTHING",
+                (row["id"], fid),
+            )
+        primary = field_ids[0] if len(field_ids) == 1 else None
+        conn.execute(
+            "UPDATE aph_unit_matches SET field_id=?,match_status='confirmed',confidence=.98,method='mapped_soi_exact_crosswalk',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (primary, row["id"]),
+        )
+        busy.update(field_ids)
+        confirmed += 1
+
+    # Automated matches no longer supported by the current SOI are returned to
+    # review. Manual confirmations are never touched.
+    for row in rows:
+        rid = int(row["id"])
+        method = str(row.get("method") or "")
+        if method.startswith("manual_") or rid in proposed_ids:
+            continue
+        if row.get("match_status") == "confirmed":
+            conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (rid,))
+            conn.execute(
+                "UPDATE aph_unit_matches SET field_id=NULL,match_status='unmatched',confidence=0.0,method='needs_confirmation',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (rid,),
+            )
+        review += 1
+
+    return {
+        "evaluated": len(rows) - preserved_manual,
+        "confirmed": confirmed,
+        "review": review,
+        "preserved_manual": preserved_manual,
+    }

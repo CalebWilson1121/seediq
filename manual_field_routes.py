@@ -97,7 +97,13 @@ def create_manual_field(farm_id: int, req: ManualFieldRequest):
         try:
             location = set_exact_boundary(field_id, req.boundary_geojson)
             soil = enrich_field(field_id, force=True) if req.enrich_soils else None
-            if soil and soil.get("total_area_acres"):
+            if req.acres is not None:
+                with connect() as conn:
+                    conn.execute(
+                        "UPDATE fields SET acres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (float(req.acres), field_id),
+                    )
+            elif soil and soil.get("total_area_acres"):
                 with connect() as conn:
                     conn.execute(
                         "UPDATE fields SET acres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -157,9 +163,10 @@ def update_field_boundary(field_id: int, req: FieldBoundaryUpdateRequest):
                 set_exact_boundary(field_id, _loads(old_location.get("boundary_geojson"), {}))
             raise
 
+        # Geometry-calculated acres are authoritative for hand edits/cuts.
+        # SSURGO intersection acreage is descriptive soil coverage, not the
+        # canonical management-field acreage.
         final_acres = float(req.acres) if req.acres is not None else float(field.get("acres") or 0)
-        if soil and soil.get("total_area_acres"):
-            final_acres = float(soil["total_area_acres"])
 
         existing_meta = {}
         try:

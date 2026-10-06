@@ -136,7 +136,9 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
         },
         "ranking_method": "SeedIQ deterministic soil + irrigation + management fit; no AI/model cost",
         "population_note": "Population is a SeedIQ planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
-        "recommendations": ranked[:max(1, min(limit, 20))],
+        "catalog_product_count": len(ranked),
+        "recommendations": ranked[:max(1, min(limit, 5))],
+        "all_options": ranked,
     }
 
 

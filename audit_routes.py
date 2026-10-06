@@ -423,8 +423,8 @@ def audit_aph_to_exact_crosswalk(identity_farm_id: int, exact_farm_id: int):
             if any(_audit_name_similarity(root, nm) >= 0.60 for nm in identity_management_names if nm):
                 strong_roots.add(root.upper())
 
+        selected_by_id = {int(x["field_id"]): x for x in selected}
         if strong_roots:
-            selected_by_id = {int(x["field_id"]): x for x in selected}
             for (root, root_practice), members in exact_groups.items():
                 if root not in strong_roots:
                     continue
@@ -442,9 +442,42 @@ def audit_aph_to_exact_crosswalk(identity_farm_id: int, exact_farm_id: int):
                         "reference_coverage_pct": 0.0,
                         "included_by_management_root": True,
                     }
-            selected = list(selected_by_id.values())
-            selected.sort(key=lambda x: str(x.get("name") or ""))
 
+        # The raster locator can be wrong on a page even when NAU's printed
+        # management name is clear. A matching management-field name + practice
+        # + reconciled acreage is an independent identity path. This never
+        # imports the SOI raster as geometry.
+        for (root, root_practice), members in exact_groups.items():
+            if practice != "UNKNOWN" and root_practice != "UNKNOWN" and practice != root_practice:
+                continue
+            similarity = max(
+                [_audit_name_similarity(root, nm) for nm in identity_management_names if nm] or [0.0]
+            )
+            if similarity < 0.60:
+                continue
+            group_acres = sum(float(row.get("acres") or 0) for row, _ in members)
+            if aph_acres:
+                group_diff = abs(group_acres - aph_acres)
+                group_pct = group_diff / aph_acres * 100.0
+                if group_diff > 10.0 and group_pct > 12.0:
+                    continue
+            for source_row, source_geom in members:
+                fid = int(source_row["id"])
+                if fid in selected_by_id:
+                    selected_by_id[fid]["name_similarity"] = round(similarity, 3)
+                    continue
+                selected_by_id[fid] = {
+                    "field_id": fid,
+                    "name": source_row.get("name"),
+                    "acres": float(source_row.get("acres") or 0),
+                    "source_coverage_pct": 0.0,
+                    "reference_coverage_pct": 0.0,
+                    "included_by_name_acreage": True,
+                    "name_similarity": round(similarity, 3),
+                }
+
+        selected = list(selected_by_id.values())
+        selected.sort(key=lambda x: str(x.get("name") or ""))
         selected_acres = round(sum(x["acres"] for x in selected), 2)
         variance = selected_acres - aph_acres if aph_acres else None
         variance_pct = abs(variance) / aph_acres * 100.0 if aph_acres and variance is not None else None

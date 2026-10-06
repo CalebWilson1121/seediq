@@ -211,6 +211,46 @@ def _bayer_trait_fit(
     return round(points, 1), reasons[:4]
 
 
+def _management_fit(
+    crop: str,
+    meta: dict[str, Any],
+    tillage: str | None,
+    row_spacing: str | None,
+    planting_window: str | None,
+) -> tuple[float, list[str]]:
+    chars = _characteristic_map(meta)
+    tillage = (tillage or "").upper()
+    row_spacing = (row_spacing or "NORMAL").upper()
+    planting_window = (planting_window or "NORMAL").upper()
+    points = 0.0
+    reasons: list[str] = []
+
+    no_till = _numeric_rating(chars, "NO_TILL_ADAPTABILITY_USCB", "NO-TILL ADAPTABILITY")
+    if tillage == "NO_TILL":
+        pts = _quality_points(no_till, 12.0)
+        points += pts
+        if no_till is not None:
+            reasons.append(f"Bayer no-till adaptability rating {no_till:g} matches farm tillage")
+    elif tillage in {"STRIP_TILL", "MIN_TILL"}:
+        points += _quality_points(no_till, 5.0)
+
+    narrow = _numeric_rating(chars, "NARROW_ROW_USCB", "NARROW ROW")
+    if row_spacing in {"15_IN", "20_IN", "TWIN_ROW"}:
+        pts = _quality_points(narrow, 8.0)
+        points += pts
+        if narrow is not None:
+            reasons.append(f"Bayer narrow-row rating {narrow:g} matches {row_spacing.replace('_IN',' in').replace('_',' ').title()}")
+
+    if planting_window == "EARLY":
+        emergence = _numeric_rating(chars, "EMERGENCE_USCB", "EMERGENCE")
+        pts = _quality_points(emergence, 5.0)
+        points += pts
+        if emergence is not None and emergence <= 3:
+            reasons.append(f"Bayer emergence rating {emergence:g} supports an early planting window")
+
+    return round(points, 1), reasons[:3]
+
+
 def _fit_score(crop: str, irrigation: str | None, awc: float | None, drainage: dict[str, Any], yield_goal: float | None, tags: set[str]) -> tuple[float, list[str]]:
     score = 55.0
     reasons: list[str] = []
@@ -267,8 +307,15 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             p.get("relative_maturity"),
             maturity_window,
         )
-        score = round(max(0, min(99, score + trait_points)), 1)
-        reasons = trait_reasons + reasons
+        management_points, management_reasons = _management_fit(
+            crop,
+            meta,
+            row.get("default_tillage"),
+            row.get("default_row_spacing"),
+            row.get("default_planting_window"),
+        )
+        score = round(max(0, min(99, score + trait_points + management_points)), 1)
+        reasons = management_reasons + trait_reasons + reasons
         if location_reason:
             reasons = [location_reason] + reasons
         pop = _population(
@@ -287,6 +334,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             "trait_package": p.get("trait_package"),
             "fit_score": score,
             "bayer_trait_points": trait_points,
+            "management_points": management_points,
             "location_eligible": eligible,
             "location_reason": location_reason,
             "maturity_window": maturity_window,
@@ -311,7 +359,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
 def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
     with connect() as conn:
         row = conn.execute(
-            "SELECT f.id,f.farm_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,fa.organization_id,cp.crop,cp.yield_goal,cp.target_population,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.id=?",
+            "SELECT f.id,f.farm_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window,cp.crop,cp.yield_goal,cp.target_population,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.id=?",
             (crop_year, field_id),
         ).fetchone()
         if not row:
@@ -337,8 +385,13 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
             "awc_0_150cm": row.get("weighted_aws150_cm"), "drainage": drainage,
             "centroid_lat": row.get("centroid_lat"), "centroid_lon": row.get("centroid_lon"),
             "maturity_window": maturity_window,
+            "farm_defaults": {
+                "tillage": row.get("default_tillage"),
+                "row_spacing": row.get("default_row_spacing"),
+                "planting_window": row.get("default_planting_window"),
+            },
         },
-        "ranking_method": "SeedIQ hard location/maturity gate first, then deterministic soil + irrigation + management fit; no AI/model cost",
+        "ranking_method": "SeedIQ hard location/maturity gate first, then SSURGO soil + IRR/NIRR + Bayer agronomic ratings + farm management defaults; no AI/model cost",
         "population_note": "Population is a SeedIQ planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
         "catalog_product_count": len(ranked),
         "location_eligible_count": len(eligible_ranked),
@@ -350,12 +403,12 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
 @router.post("/api/farms/{farm_id}/channel-auto-plan")
 def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
     with connect() as conn:
-        farm = conn.execute("SELECT id,organization_id FROM farms WHERE id=?", (farm_id,)).fetchone()
+        farm = conn.execute("SELECT id,organization_id,default_tillage,default_row_spacing,default_planting_window FROM farms WHERE id=?", (farm_id,)).fetchone()
         if not farm:
             raise HTTPException(status_code=404, detail="Farm not found")
         rows = rows_to_dicts(conn.execute(
-            "SELECT f.id AS field_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,cp.id AS crop_plan_id,cp.crop,cp.yield_goal,cp.target_population,cp.selected_seed_product_id,cp.seed_price_per_unit,cp.seeds_per_unit,cp.pricing_source,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon "
-            "FROM fields f LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.farm_id=? ORDER BY f.name",
+            "SELECT f.id AS field_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,cp.id AS crop_plan_id,cp.crop,cp.yield_goal,cp.target_population,cp.selected_seed_product_id,cp.seed_price_per_unit,cp.seeds_per_unit,cp.pricing_source,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window "
+            "FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.farm_id=? ORDER BY f.name",
             (req.crop_year, farm_id),
         ).fetchall())
         all_products = rows_to_dicts(conn.execute(

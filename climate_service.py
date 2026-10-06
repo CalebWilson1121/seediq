@@ -62,10 +62,10 @@ def _enso_phase(index_value: float | None) -> str | None:
 
 
 def _grid_key(lat: float, lon: float) -> tuple[float, float]:
-    # ERA5-Land itself is a reanalysis grid, not field-level rain-gauge data.
-    # A 0.10 degree bucket is a closer match to its effective spatial scale and
-    # avoids duplicate historical requests for nearby fields.
-    return (round(lat / 0.10) * 0.10, round(lon / 0.10) * 0.10)
+    # ERA5 is a 0.25 degree reanalysis grid, not field-level rain-gauge data.
+    # Bucket nearby fields to the same native grid so historical precipitation
+    # is consistent and duplicate API calls are avoided.
+    return (round(lat / 0.25) * 0.25, round(lon / 0.25) * 0.25)
 
 
 def _fetch_weather_window(lat: float, lon: float, min_year: int, max_year: int) -> dict[int, dict[str, Any]]:
@@ -80,15 +80,29 @@ def _fetch_weather_window(lat: float, lon: float, min_year: int, max_year: int) 
         "temperature_unit": "fahrenheit",
         "precipitation_unit": "inch",
         "timezone": "auto",
-        "models": "era5_land",
+        "models": "era5",
     }
     r = httpx.get(OPEN_METEO_ARCHIVE, params=params, timeout=40.0)
     r.raise_for_status()
-    daily = r.json().get("daily") or {}
+    payload = r.json()
+    daily = payload.get("daily") or {}
     dates = daily.get("time") or []
     highs = daily.get("temperature_2m_max") or []
     lows = daily.get("temperature_2m_min") or []
     rain = daily.get("precipitation_sum") or []
+    missing = [
+        name for name, values in {
+            "time": dates,
+            "temperature_2m_max": highs,
+            "temperature_2m_min": lows,
+            "precipitation_sum": rain,
+        }.items() if not values
+    ]
+    if missing:
+        raise RuntimeError(
+            "Open-Meteo ERA5 response missing " + ", ".join(missing) +
+            f"; response keys={sorted(payload.keys())}, daily keys={sorted(daily.keys())}"
+        )
 
     grouped: dict[int, list[tuple[datetime, float, float, float]]] = defaultdict(list)
     for ds, hi, lo, pr in zip(dates, highs, lows, rain):
@@ -239,7 +253,7 @@ def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
                     "field_longitude": m["lon"],
                     "weather_grid_latitude": round(grid_lat, 4),
                     "weather_grid_longitude": round(grid_lon, 4),
-                    "weather_model": "era5_land",
+                    "weather_model": "era5",
                     "monthly_precipitation_in": (wx or {}).get("monthly_precipitation_in"),
                     "jun_aug_precipitation_in": (wx or {}).get("jun_aug_precipitation_in"),
                     "enso_primary_index": "RONI" if roni_value is not None else ("ONI" if oni_value is not None else None),
@@ -260,7 +274,7 @@ def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
                     (wx or {}).get("dry_days"),
                     (wx or {}).get("gdd_base50"),
                     phase, primary_index,
-                    "Open-Meteo ERA5-Land + NOAA CPC RONI/ONI",
+                    "Open-Meteo ERA5 + NOAA CPC RONI/ONI",
                     json_dumps(meta),
                 ))
                 years_written += 1
@@ -306,7 +320,7 @@ def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
         "weather_api_calls": weather_calls,
         "grid_groups": len(grid_groups),
         "enso_source": "NOAA CPC RONI (primary) + ONI",
-        "weather_source": "Open-Meteo ERA5-Land",
+        "weather_source": "Open-Meteo ERA5",
         "skipped": skipped,
         "results": results,
     }

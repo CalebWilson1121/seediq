@@ -390,7 +390,8 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 "legal_section": entry.section,
                 "township_range": entry.township_range,
                 "insurance_data_scrubbed": True,
-                "geometry_status": "missing",
+                "geometry_status": "reference_missing",
+                "geometry_authoritative": False,
             }
             match = page_matches.get(key)
             if match and section_geojson:
@@ -398,15 +399,16 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 boundary = _component_geometry(comp, frame_small, section_geojson)
                 if boundary and 0.25 <= ratio <= 1.80:
                     metadata.update({
-                        "boundary_geojson": boundary,
-                        "geometry_status": "mapped_soi_raster_georeferenced",
+                        "reference_boundary_geojson": boundary,
+                        "geometry_status": "mapped_soi_reference",
+                        "geometry_authoritative": False,
                         "geometry_confidence": round(confidence, 3),
                         "geometry_acre_ratio": round(ratio, 3),
-                        "boundary_source": "NAU Mapped SOI raster + Kansas PLSS",
+                        "reference_boundary_source": "NAU Mapped SOI raster + Kansas PLSS",
                     })
                     geometry_matches += 1
             existing = parsed_fields.get(key)
-            if existing is None or (existing.metadata.get("geometry_status") == "missing" and metadata.get("geometry_status") != "missing"):
+            if existing is None or (existing.metadata.get("geometry_status") == "reference_missing" and metadata.get("geometry_status") != "reference_missing"):
                 parsed_fields[key] = ParsedField(
                     name=display_name,
                     acres=entry.acres,
@@ -435,8 +437,8 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
     if not out.fields:
         out.warnings.append("Mapped SOI parser did not produce physical fields.")
     elif geometry_matches < len(out.fields):
-        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical fields; {geometry_matches} received raster-georeferenced boundaries. Unmatched/low-confidence fields remain available for manual boundary review instead of receiving guessed geometry.")
+        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities; {geometry_matches} received raster-georeferenced reference shapes. Reference shapes are locators only and are not promoted to authoritative SeedIQ boundaries.")
     else:
-        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical fields and raster-georeferenced all boundaries. Boundaries should be visually reviewed against the SeedIQ basemap before production recommendations.")
+        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes. SeedIQ requires exact MBAR/GIS or confirmed manual geometry before soil and production recommendations use a boundary.")
     out.warnings.append("Insurance coverage, premium, liability, yield, policy election and unit data were intentionally excluded from normalized SeedIQ output.")
     return out

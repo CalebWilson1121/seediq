@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from database import connect, row_to_dict, rows_to_dicts
-from channel_fit_routes import _loads, _rank_products
+from channel_fit_routes import _loads, _rank_products, _production_context, _whole_farm_reason_summary
+from climate_service import current_enso_outlook
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ def _build_field_book_data(token: str):
             (proposal["crop_year"], proposal["farm_id"]),
         ).fetchall()
 
+    outlook = current_enso_outlook(int(proposal.get("crop_year") or 0))
     fields = []
     for row in rows_to_dicts(rows):
         crop = (row.get("crop") or "").upper()
@@ -73,10 +75,42 @@ def _build_field_book_data(token: str):
             "unit_size_seeds": row.get("unit_size_seeds"),
             "source_url": row.get("source_url"),
         }
+        context = _production_context(int(row.get("field_id")), crop)
+        row["production_context"] = context
         ranked = _rank_products(row, [product])
         selected_fit = ranked[0] if ranked else {}
         fit_score = selected_fit.get("fit_score", 0)
         reasons = selected_fit.get("reasons", [])
+        why = _whole_farm_reason_summary(row, selected_fit, context)
+        planting = outlook.get("planting") or {}
+        summer = outlook.get("early_summer") or {}
+        hist = why.get("climate_history") or {}
+        el_pct = planting.get("el_nino_pct")
+        delta = hist.get("el_nino_vs_overall_pct")
+        climate_decision = None
+        if el_pct is not None:
+            if delta is not None and delta <= -5:
+                climate_decision = (
+                    f"NOAA shows {el_pct}% El Nino odds for {planting.get('season') or 'spring'}; "
+                    f"this field has averaged {abs(delta):.0f}% below its overall yield in El Nino years. "
+                    "That supports keeping stress stability, roots and moisture-use efficiency in the seed decision."
+                )
+            elif delta is not None and delta >= 5:
+                climate_decision = (
+                    f"NOAA shows {el_pct}% El Nino odds for {planting.get('season') or 'spring'}; "
+                    f"this field has averaged {delta:.0f}% above its overall yield in El Nino years. "
+                    "That supports protecting top-end yield potential rather than over-defending."
+                )
+            else:
+                climate_decision = (
+                    f"NOAA shows {el_pct}% El Nino odds for {planting.get('season') or 'spring'}, "
+                    "but this field does not show a strong historical El Nino yield bias. ENSO remains a secondary factor."
+                )
+            if summer.get("neutral_pct") is not None and summer.get("el_nino_pct") is not None:
+                climate_decision += (
+                    f" NOAA shifts to {summer.get('neutral_pct')}% Neutral / {summer.get('el_nino_pct')}% El Nino "
+                    f"for {summer.get('season') or 'early summer'}, so the winter signal is not treated as a summer guarantee."
+                )
         hydro = _loads(row.get("hydrologic_group_summary_json"), {})
         if not isinstance(hydro, dict):
             hydro = {}
@@ -105,6 +139,9 @@ def _build_field_book_data(token: str):
             "location_reason": selected_fit.get("location_reason"),
             "bayer_trait_points": selected_fit.get("bayer_trait_points"),
             "management_points": selected_fit.get("management_points"),
+            "climate_decision": climate_decision,
+            "climate_history": why.get("climate_history"),
+            "field_signals": why.get("field_signals"),
             "boundary_geojson": _boundary(row.get("boundary_geojson")),
             "centroid_lat": row.get("centroid_lat"),
             "centroid_lon": row.get("centroid_lon"),
@@ -131,6 +168,7 @@ def _build_field_book_data(token: str):
         "field_count": len(fields),
         "planned_acres": round(sum(float(x.get("acres") or 0) for x in fields), 2),
         "estimated_seed_value": round(sum(float(x.get("total_seed_cost") or 0) for x in fields), 2),
+        "climate_outlook": outlook,
         "method": "SeedIQ full field-fit engine using location/maturity eligibility, SSURGO soil, IRR/NIRR, Bayer agronomic ratings, farm management defaults and yield environment.",
         "population_note": "Planting populations are SeedIQ planning recommendations and should be confirmed by the dealer/agronomist for local conditions.",
     }

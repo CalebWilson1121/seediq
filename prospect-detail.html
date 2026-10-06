@@ -24,26 +24,76 @@ function cropCell(f){const crop=f.crop||'';return `<div class="cropBtns"><button
 function topDistribution(obj){const entries=Object.entries(obj||{}).sort((a,b)=>b[1]-a[1]);return entries.length?entries[0][0]:'—'}
 
 
+function aphCandidateHtml(matchId,candidate,primary=false){
+  if(!candidate)return '';
+  const names=(candidate.field_names||[]).map(esc).join(' + ');
+  const ids=(candidate.field_ids||[]).map(Number);
+  const aphAc=Number(candidate.aph_acres||0),sel=Number(candidate.selected_acres||0),diff=sel-aphAc;
+  const namePct=Math.round(Number(candidate.name_similarity||0)*100);
+  const signals=[];
+  if(namePct)signals.push(namePct+'% name');
+  signals.push((diff>=0?'+':'')+diff.toFixed(2)+' ac');
+  return '<div style="border:1px solid '+(primary?'#9fcbb0':'var(--line)')+';background:'+(primary?'#f3faf5':'#fff')+';border-radius:10px;padding:10px;margin-top:7px">'+
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div><b>'+names+'</b><div class="muted" style="font-size:11px;margin-top:3px">'+sel.toFixed(2)+' mapped ac • '+signals.join(' • ')+'</div></div>'+
+    '<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end"><button class="btn small secondary" onclick=\'focusAPHFields('+JSON.stringify(ids)+')\'>Map</button><button class="btn small" onclick=\'confirmAPHSuggestion('+matchId+','+JSON.stringify(ids)+',this)\'>'+(primary?'Confirm':'Use')+'</button></div></div>'+
+    (candidate.reason?'<div class="muted" style="font-size:11px;margin-top:5px">'+esc(candidate.reason)+'</div>':'')+
+  '</div>';
+}
 function aphMatchTable(){
   const matches=aphData.matches||[],fields=aphData.fields||[],autoMap={};
   (aphAuto.suggestions||[]).forEach(x=>autoMap[x.match_id]=x);
   if(!matches.length)return '<div class="muted">No APH uploaded yet. Map the farm first, then upload APH here.</div>';
-  return '<table class="table"><thead><tr><th>APH Unit</th><th>Crop / Acres</th><th>Match</th><th>Mapped Fields</th><th></th></tr></thead><tbody>'+
-    matches.map(m=>{
-      const md=m.metadata||{},a=autoMap[m.id]||{},suggestion=a.suggestion||null;
-      const existing=(m.field_ids||[]).map(Number),suggested=(suggestion?.field_ids||[]).map(Number);
-      const selected=new Set(existing.length?existing:suggested),aphAc=Number(md.aph_acres||0);
-      const checks=fields.map(f=>'<label style="display:flex;align-items:center;gap:6px;padding:3px 0"><input class="aph-field-check-'+m.id+'" type="checkbox" value="'+f.id+'" data-acres="'+Number(f.acres||0)+'" '+(selected.has(Number(f.id))?'checked':'')+' onchange="updateAPHSelectedTotal('+m.id+','+aphAc+')"><span>'+esc(f.name)+' — '+Number(f.acres||0).toFixed(2)+' ac</span></label>').join('');
-      const total=existing.length?Number(m.selected_acres||0):Number(suggestion?.selected_acres||0),diff=total-aphAc;
-      const badge=m.match_status==='confirmed'?'<span class="status ready">Confirmed</span>':(a.confidence==='high'?'<span class="status ready">Auto: High</span>':a.confidence==='medium'?'<span class="status pending">Auto: Medium</span>':a.confidence==='review'?'<span class="status pending">Review</span>':'<span class="status pending">No suggestion</span>');
-      const why=suggestion?'<div class="muted" style="font-size:11px;margin-top:4px">'+esc(suggestion.reason||'')+'</div>':'';
-      return '<tr><td><b>'+esc(m.unit_key)+'</b><br><span class="muted">'+esc(m.original_name||'APH')+'</span></td><td>'+esc(md.crop||'—')+'<br><span class="muted">'+(aphAc?aphAc.toFixed(2):'—')+' ac • '+esc(md.practice||'—')+'</span></td><td>'+badge+why+'</td><td><div style="max-height:170px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:7px">'+checks+'</div><div id="aph-total-'+m.id+'" class="muted" style="margin-top:6px;font-size:12px"><b>'+total.toFixed(2)+' / '+(aphAc?aphAc.toFixed(2):'—')+' ac selected</b>'+(aphAc?' • variance '+(diff>=0?'+':'')+diff.toFixed(2)+' ac':'')+'</div></td><td>'+(m.match_status==='confirmed'?'<button class="btn small secondary" onclick="confirmAPHMatch('+m.id+')">Update</button>':'<button class="btn small" onclick="confirmAPHMatch('+m.id+')">Confirm Group</button>')+'</td></tr>'
-    }).join('')+'</tbody></table>';
+  const confirmed=matches.filter(m=>m.match_status==='confirmed').length;
+  const high=(aphAuto.suggestions||[]).filter(x=>x.confidence==='high'&&!matches.find(m=>m.id===x.match_id&&m.match_status==='confirmed')).length;
+  const medium=(aphAuto.suggestions||[]).filter(x=>x.confidence==='medium'&&!matches.find(m=>m.id===x.match_id&&m.match_status==='confirmed')).length;
+  const review=matches.length-confirmed-high-medium;
+  const ordered=[...matches].sort((a,b)=>{
+    const ar=a.match_status==='confirmed'?2:((autoMap[a.id]||{}).confidence==='high'?0:1);
+    const br=b.match_status==='confirmed'?2:((autoMap[b.id]||{}).confidence==='high'?0:1);
+    return ar-br||String(a.unit_key||'').localeCompare(String(b.unit_key||''));
+  });
+  return '<div class="grid" style="grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:12px">'+
+    '<div class="soil-cell"><span>APH units</span><b style="font-size:20px">'+matches.length+'</b></div>'+
+    '<div class="soil-cell"><span>Confirmed</span><b style="font-size:20px;color:var(--green)">'+confirmed+'</b></div>'+
+    '<div class="soil-cell"><span>1-click ready</span><b style="font-size:20px">'+high+'</b></div>'+
+    '<div class="soil-cell"><span>Needs review</span><b style="font-size:20px">'+(medium+review)+'</b></div></div>'+
+    '<div class="muted" style="font-size:12px;margin-bottom:10px">SeedIQ puts the most likely management-field group first. Confirm the obvious ones in one click; only use manual field picking for true exceptions. Confirmed names are remembered for future APH uploads.</div>'+
+    ordered.map(m=>{
+      const md=m.metadata||{},a=autoMap[m.id]||{},suggestion=a.suggestion||null,existing=(m.field_ids||[]).map(Number),aphAc=Number(md.aph_acres||0);
+      const selectedNames=fields.filter(f=>existing.includes(Number(f.id))).map(f=>f.name);
+      const badge=m.match_status==='confirmed'?'<span class="status ready">Confirmed</span>':a.confidence==='high'?'<span class="status ready">High confidence</span>':a.confidence==='medium'?'<span class="status pending">Medium</span>':'<span class="status pending">Review</span>';
+      const alternatives=(a.alternatives||[]).filter(x=>!suggestion||JSON.stringify(x.field_ids)!==JSON.stringify(suggestion.field_ids)).slice(0,3);
+      const manualChecks=fields.map(f=>'<label style="display:flex;align-items:center;gap:6px;padding:3px 0"><input class="aph-field-check-'+m.id+'" type="checkbox" value="'+f.id+'" data-acres="'+Number(f.acres||0)+'" '+(existing.includes(Number(f.id))?'checked':'')+' onchange="updateAPHSelectedTotal('+m.id+','+aphAc+')"><span>'+esc(f.name)+' — '+Number(f.acres||0).toFixed(2)+' ac</span></label>').join('');
+      return '<div style="border:1px solid var(--line);border-radius:13px;padding:12px;margin:9px 0;background:#fff">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div><b>'+esc(m.unit_key)+'</b><div class="muted" style="font-size:12px">'+esc(md.crop||'—')+' • '+esc(md.practice||'—')+' • '+(aphAc?aphAc.toFixed(2)+' APH ac':'acres unavailable')+(md.farm_name?' • '+esc(md.farm_name):'')+'</div></div>'+badge+'</div>'+
+        (m.match_status==='confirmed'
+          ? '<div style="margin-top:8px"><b style="font-size:12px">Attached to:</b> '+(selectedNames.length?selectedNames.map(x=>'<span class="tag">'+esc(x)+'</span>').join(''):'<span class="muted">No fields</span>')+' <button class="btn small secondary" onclick=\'focusAPHFields('+JSON.stringify(existing)+')\'>View</button></div>'
+          : (suggestion?'<div style="margin-top:8px;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--muted)">Best suggestion</div>'+aphCandidateHtml(m.id,suggestion,true):'<div class="callout warn" style="margin-top:8px">No strong automatic suggestion. Review likely groups below.</div>'))+
+        (m.match_status!=='confirmed'&&alternatives.length?'<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:750">Other likely groups</summary>'+alternatives.map(x=>aphCandidateHtml(m.id,x,false)).join('')+'</details>':'')+
+        '<details style="margin-top:9px"><summary style="cursor:pointer;font-size:12px;font-weight:750">'+(m.match_status==='confirmed'?'Change mapping':'Manual field picker')+'</summary><div style="max-height:210px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:7px">'+manualChecks+'</div><div id="aph-total-'+m.id+'" class="muted" style="margin-top:6px;font-size:12px"><b>'+Number(m.selected_acres||0).toFixed(2)+' / '+(aphAc?aphAc.toFixed(2):'—')+' ac selected</b></div><button class="btn small" style="margin-top:7px" onclick="confirmAPHMatch('+m.id+')">Save manual mapping</button></details>'+
+      '</div>';
+    }).join('');
 }
 function updateAPHSelectedTotal(matchId,aphAcres){
   const boxes=[...document.querySelectorAll('.aph-field-check-'+matchId+':checked')];
   const total=boxes.reduce((s,b)=>s+Number(b.dataset.acres||0),0),diff=total-Number(aphAcres||0),el=document.getElementById('aph-total-'+matchId);
   if(el)el.innerHTML='<b>'+total.toFixed(2)+' / '+Number(aphAcres||0).toFixed(2)+' ac selected</b> • variance '+(diff>=0?'+':'')+diff.toFixed(2)+' ac';
+}
+async function confirmAPHSuggestion(matchId,fieldIds,btn){
+  if(!fieldIds||!fieldIds.length)return;
+  try{
+    if(btn){btn.disabled=true;btn.textContent='Saving…'}
+    await api('/api/aph-matches/'+matchId+'/confirm',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({field_ids:fieldIds})});
+    await loadAPHData();render();
+  }catch(e){alert(e.message);if(btn){btn.disabled=false;btn.textContent='Confirm'}}
+}
+function focusAPHFields(fieldIds){
+  const wanted=new Set((fieldIds||[]).map(Number)),soil=((prospect.soil_status||{}).fields||[]).filter(x=>wanted.has(Number(x.field_id))&&x.boundary_geojson);
+  if(!soil.length)return alert('Exact mapped boundary is not available for that suggested group.');
+  if(!map||!map.isStyleLoaded())return alert('Map is still loading.');
+  const b=new maplibregl.LngLatBounds();soil.forEach(x=>boundsFromGeometry(x.boundary_geojson,b));
+  if(!b.isEmpty())map.fitBounds(b,{padding:70,maxZoom:17,duration:500});
+  selectedFieldId=Number(soil[0].field_id);document.getElementById('map')?.scrollIntoView({behavior:'smooth',block:'center'});
 }
 function productionProfileHtml(){
   const fs=productionProfile.fields||[];

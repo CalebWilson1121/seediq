@@ -257,40 +257,20 @@ def channel_catalog_probe(crop: str = "corn", page: int = 0):
 
 
 @router.get("/api/admin/channel-catalog-client-discovery")
-def channel_catalog_client_discovery(crop: str = "corn"):
-    crop = crop.lower()
-    if crop not in {"corn", "soybeans"}:
-        raise HTTPException(status_code=400, detail="crop must be corn or soybeans")
-    url = f"{BAYER_BASE}/{crop}/channel/seed-catalog"
-    r = _fetch(url)
-    srcs = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', r.text, re.I)
-    matches = []
-    checked = 0
-    for src in srcs:
-        if not src.startswith("/"):
-            continue
-        checked += 1
-        try:
-            js = _fetch(BAYER_BASE + src).text
-        except HTTPException:
-            continue
-        low = js.lower()
-        for needle in ("seed-products", "seed-filters"):
-            pos = low.find(needle)
-            if pos >= 0:
-                urls = sorted(set(re.findall(r'https?://[^"'\\\\\s)]+', js)))
-                graph_positions = [m.start() for m in re.finditer("graphql", low)]
-                graph_snippets = [js[max(0,p-1200):p+1800] for p in graph_positions[:8]]
-                matches.append({
-                    "src": src,
-                    "needle": needle,
-                    "urls": urls[:80],
-                    "snippet": js[max(0,pos-5000):pos+5000],
-                    "graphql_snippets": graph_snippets,
-                })
-                break
-    html_urls = sorted(set(re.findall(r'https?://[^"'\\\\\s<]+', r.text)))
-    return {"checked_scripts": checked, "html_urls": html_urls[:100], "matches": matches[:12]}
+def channel_catalog_client_discovery():
+    src = "/_next/static/chunks/pages/%5Bcrop%5D/%5Bbrand%5D/seed-catalog-74c25bf669a9b3e6.js"
+    js = _fetch(BAYER_BASE + src).text
+    low = js.lower()
+    pos = low.find("seed-products")
+    urls = sorted(set(re.findall(r'https?://[^"'\\\\\\s)]+', js)))
+    graph_positions = [m.start() for m in re.finditer("graphql", low)]
+    return {
+        "src": src,
+        "bytes": len(js),
+        "urls": urls[:120],
+        "seed_products_snippet": js[max(0,pos-7000):pos+7000] if pos >= 0 else None,
+        "graphql_snippets": [js[max(0,p-1800):p+2600] for p in graph_positions[:12]],
+    }
 
 
 # Temporary operator endpoint used to seed the live catalog. Remove/lock down after sync.

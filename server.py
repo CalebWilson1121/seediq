@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -59,6 +60,13 @@ class FarmDefaultsRequest(BaseModel):
     tillage: str | None = None
     row_spacing: str = "NORMAL"
     planting_window: str = "NORMAL"
+
+class ProspectCreateRequest(BaseModel):
+    farm_name: str
+    main_contact: str
+    state: str
+    county: str
+    organization_id: int = 2
 
 class RotateRequest(BaseModel):
     from_year: int
@@ -324,6 +332,68 @@ def rotate_whole_farm(farm_id: int, req: RotateRequest):
 @app.put("/api/fields/{field_id}/seed-selection")
 def save_seed_selection(field_id: int, req: SeedSelectionRequest):
     return select_seed(field_id, req.crop_year, req.seed_product_id, req.target_population, req.notes)
+
+@app.post("/api/prospects")
+def create_prospect(req: ProspectCreateRequest):
+    farm_name = (req.farm_name or "").strip()
+    main_contact = (req.main_contact or "").strip()
+    state = (req.state or "").strip().upper()
+    county = (req.county or "").strip()
+    if not farm_name:
+        raise HTTPException(status_code=400, detail="Farm Name is required")
+    if not main_contact:
+        raise HTTPException(status_code=400, detail="Main Contact is required")
+    if len(state) != 2:
+        raise HTTPException(status_code=400, detail="State must be a 2-letter abbreviation")
+    if not county:
+        raise HTTPException(status_code=400, detail="County is required")
+
+    farm_key = f"manual:{uuid.uuid4().hex}"
+    try:
+        with connect() as conn:
+            org = conn.execute(
+                "SELECT id FROM dealer_organizations WHERE id=? AND status='active'",
+                (req.organization_id,),
+            ).fetchone()
+            if not org:
+                raise HTTPException(status_code=400, detail="Dealer organization is unavailable")
+            if backend_name() == "supabase-postgres":
+                farm = conn.execute(
+                    "INSERT INTO farms(farm_key,farm_name,producer_name,state,county,organization_id,default_row_spacing,default_planting_window) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
+                    (farm_key, farm_name, main_contact, state, county, req.organization_id, "NORMAL", "NORMAL"),
+                ).fetchone()
+                farm_id = int(farm["id"])
+                prospect = conn.execute(
+                    "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json,organization_id) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
+                    (farm_id, farm_name, "new", "manual_create", 0, "[]", '{"created_from":"scratch"}', req.organization_id),
+                ).fetchone()
+                prospect_id = int(prospect["id"])
+            else:
+                cur = conn.execute(
+                    "INSERT INTO farms(farm_key,farm_name,producer_name,state,county,default_row_spacing,default_planting_window) VALUES(?,?,?,?,?,?,?)",
+                    (farm_key, farm_name, main_contact, state, county, "NORMAL", "NORMAL"),
+                )
+                farm_id = int(cur.lastrowid)
+                cur = conn.execute(
+                    "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json) VALUES(?,?,?,?,?,?,?)",
+                    (farm_id, farm_name, "new", "manual_create", 0, "[]", '{"created_from":"scratch"}'),
+                )
+                prospect_id = int(cur.lastrowid)
+        return {
+            "id": prospect_id,
+            "farm_id": farm_id,
+            "prospect_name": farm_name,
+            "farm_name": farm_name,
+            "main_contact": main_contact,
+            "state": state,
+            "county": county,
+            "source": "manual_create",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Prospect could not be created: {str(exc)[:220]}") from exc
+
 
 @app.get("/api/prospects")
 def list_prospects():

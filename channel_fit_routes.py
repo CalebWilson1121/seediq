@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from statistics import mean, median
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -251,6 +252,83 @@ def _management_fit(
     return round(points, 1), reasons[:3]
 
 
+
+def _production_context(field_id: int, crop: str) -> dict[str, Any]:
+    crop = _normalize_crop(crop)
+    with connect() as conn:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT cr.crop_year,cr.yield_value,e.precipitation_in,e.heat_days_95,e.heat_days_90 "
+            "FROM crop_records cr LEFT JOIN field_year_environment e ON e.field_id=cr.field_id AND e.crop_year=cr.crop_year "
+            "WHERE cr.field_id=? AND upper(cr.crop)=? AND cr.yield_value IS NOT NULL ORDER BY cr.crop_year",
+            (field_id, crop),
+        ).fetchall())
+    yields = [float(r["yield_value"]) for r in rows if r.get("yield_value") is not None]
+    if not yields:
+        return {"year_count": 0, "average_yield": None, "stability_score": None, "hot_dry_sensitivity": None}
+    avg = mean(yields)
+    stability = None
+    if len(yields) >= 2 and avg:
+        mad = mean(abs(x - avg) for x in yields)
+        stability = round(max(0.0, min(100.0, 100.0 - (mad / avg * 180.0))), 0)
+
+    weather_rows = [r for r in rows if r.get("precipitation_in") is not None and r.get("heat_days_95") is not None]
+    sensitivity = None
+    stress_years = 0
+    if len(weather_rows) >= 4:
+        rain_med = median(float(r["precipitation_in"]) for r in weather_rows)
+        heat_med = median(float(r["heat_days_95"]) for r in weather_rows)
+        stress = [float(r["yield_value"]) for r in weather_rows if float(r["precipitation_in"]) <= rain_med and float(r["heat_days_95"]) >= heat_med]
+        normal = [float(r["yield_value"]) for r in weather_rows if not (float(r["precipitation_in"]) <= rain_med and float(r["heat_days_95"]) >= heat_med)]
+        stress_years = len(stress)
+        if stress and normal and mean(normal) > 0:
+            sensitivity = round(max(-0.5, min(0.5, (mean(normal) - mean(stress)) / mean(normal))), 3)
+
+    return {
+        "year_count": len(yields),
+        "average_yield": round(avg, 1),
+        "recent_5yr_average": round(mean(yields[-5:]), 1),
+        "stability_score": stability,
+        "hot_dry_sensitivity": sensitivity,
+        "weather_year_count": len(weather_rows),
+        "stress_year_count": stress_years,
+    }
+
+
+def _aph_production_fit(crop: str, meta: dict[str, Any], tags: set[str], context: dict[str, Any]) -> tuple[float, list[str]]:
+    years = int(context.get("year_count") or 0)
+    if years < 3:
+        return 0.0, []
+    points = 0.0
+    reasons: list[str] = []
+    stability = context.get("stability_score")
+    sensitivity = context.get("hot_dry_sensitivity")
+    chars = _characteristic_map(meta)
+
+    if stability is not None and stability >= 80:
+        if "high_yield" in tags or "high_management" in tags or "broad_acre" in tags:
+            points += 4.0
+            reasons.append(f"APH history is stable ({int(stability)}/100), supporting more offensive yield positioning")
+    elif stability is not None and stability < 65:
+        if "stress" in tags or "drought" in tags or "broad_acre" in tags:
+            points += 4.0
+            reasons.append(f"APH history is variable ({int(stability)}/100), increasing value of defensive placement")
+
+    if sensitivity is not None and sensitivity >= 0.08:
+        if _normalize_crop(crop) == "CORN":
+            drought = _numeric_rating(chars, "DROUGHT_TOLERANCE_USCB", "DROUGHT TOLERANCE")
+            root = _numeric_rating(chars, "ROOT_STRENGTH_USCB", "ROOT STRENGTH")
+            drought_pts = _quality_points(drought, 7.0)
+            root_pts = _quality_points(root, 3.0)
+            points += drought_pts + root_pts
+            if drought_pts + root_pts >= 4:
+                reasons.append(f"APH/weather history shows about {round(sensitivity*100)}% hot/dry downside; drought/root ratings gain weight")
+        else:
+            if "stress" in tags or "drought" in tags:
+                points += 6.0
+                reasons.append(f"APH/weather history shows about {round(sensitivity*100)}% hot/dry downside; stress tolerance gains weight")
+    return round(min(points, 10.0), 1), reasons[:2]
+
+
 def _fit_score(crop: str, irrigation: str | None, awc: float | None, drainage: dict[str, Any], yield_goal: float | None, tags: set[str]) -> tuple[float, list[str]]:
     score = 55.0
     reasons: list[str] = []
@@ -283,6 +361,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
     crop = _normalize_crop(row.get("crop") or row.get("field_crop"))
     drainage = _loads(row.get("drainage_summary_json"), {})
     latitude = row.get("centroid_lat")
+    production_context = row.get("production_context") or {"year_count": 0}
     ranked: list[dict[str, Any]] = []
     for p in products:
         meta = _loads(p.get("metadata_json"), {})
@@ -314,8 +393,9 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             row.get("default_row_spacing"),
             row.get("default_planting_window"),
         )
-        score = round(max(0, min(99, score + trait_points + management_points)), 1)
-        reasons = management_reasons + trait_reasons + reasons
+        aph_points, aph_reasons = _aph_production_fit(crop, meta, tags, production_context)
+        score = round(max(0, min(99, score + trait_points + management_points + aph_points)), 1)
+        reasons = aph_reasons + management_reasons + trait_reasons + reasons
         if location_reason:
             reasons = [location_reason] + reasons
         pop = _population(
@@ -335,6 +415,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             "fit_score": score,
             "bayer_trait_points": trait_points,
             "management_points": management_points,
+            "aph_points": aph_points,
             "location_eligible": eligible,
             "location_reason": location_reason,
             "maturity_window": maturity_window,
@@ -372,7 +453,10 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
             "SELECT * FROM seed_products WHERE brand='Channel' AND active=true AND crop_year=? AND upper(crop)=? AND (organization_id=? OR ? IS NULL) ORDER BY relative_maturity,product_name",
             (crop_year, crop, org_id, org_id),
         ).fetchall())
-    ranked = _rank_products(dict(row), products)
+    row_dict = dict(row)
+    production_context = _production_context(field_id, crop)
+    row_dict["production_context"] = production_context
+    ranked = _rank_products(row_dict, products)
     eligible_ranked = [x for x in ranked if x.get("location_eligible")]
     drainage = _loads(row.get("drainage_summary_json"), {})
     maturity_window = _maturity_window(crop, row.get("centroid_lat"))
@@ -390,8 +474,9 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
                 "row_spacing": row.get("default_row_spacing"),
                 "planting_window": row.get("default_planting_window"),
             },
+            "aph_production_context": production_context,
         },
-        "ranking_method": "SeedIQ hard location/maturity gate first, then SSURGO soil + IRR/NIRR + Bayer agronomic ratings + farm management defaults; no AI/model cost",
+        "ranking_method": "SeedIQ hard location/maturity gate first, then SSURGO soil + IRR/NIRR + Bayer agronomic ratings + farm management + matched APH/weather production history; no AI/model cost",
         "population_note": "Population is a SeedIQ planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
         "catalog_product_count": len(ranked),
         "location_eligible_count": len(eligible_ranked),
@@ -433,6 +518,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
             if row.get("selected_seed_product_id") and not req.overwrite_existing:
                 skipped_existing += 1
                 continue
+            row["production_context"] = _production_context(int(row["field_id"]), crop)
             ranked = _rank_products(row, products_by_crop.get(crop, []))
             eligible_ranked = [x for x in ranked if x.get("location_eligible")]
             if not eligible_ranked:
@@ -477,5 +563,5 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
         "skipped_unassigned": skipped_unassigned,
         "skipped_no_products": skipped_no_products,
         "assignments": assignments,
-        "method": "Hard field-location maturity gate first; then Channel fit using SSURGO AWC/drainage + IRR/NIRR + existing yield goal. Products outside the local maturity window stay in the catalog but cannot be auto-selected. Existing dealer price is preserved. Yield goals are never invented by auto-plan.",
+        "method": "Hard field-location maturity gate first; then Channel fit using SSURGO, IRR/NIRR, Bayer ratings, farm management and matched APH/weather production history. Products outside the local maturity window stay in the catalog but cannot be auto-selected. APH influence is conservative and cannot override the location gate.",
     }

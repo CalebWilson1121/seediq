@@ -256,6 +256,37 @@ def channel_catalog_probe(crop: str = "corn", page: int = 0):
     }
 
 
+@router.get("/api/admin/channel-catalog-client-discovery")
+def channel_catalog_client_discovery(crop: str = "corn"):
+    crop = crop.lower()
+    if crop not in {"corn", "soybeans"}:
+        raise HTTPException(status_code=400, detail="crop must be corn or soybeans")
+    url = f"{BAYER_BASE}/{crop}/channel/seed-catalog"
+    r = _fetch(url)
+    srcs = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', r.text, re.I)
+    matches = []
+    checked = 0
+    for src in srcs:
+        if not src.startswith("/"):
+            continue
+        checked += 1
+        try:
+            js = _fetch(BAYER_BASE + src).text
+        except HTTPException:
+            continue
+        low = js.lower()
+        for needle in ("seed-products", "seed-filters"):
+            pos = low.find(needle)
+            if pos >= 0:
+                matches.append({
+                    "src": src,
+                    "needle": needle,
+                    "snippet": js[max(0,pos-1800):pos+3000],
+                })
+                break
+    return {"checked_scripts": checked, "matches": matches[:12]}
+
+
 # Temporary operator endpoint used to seed the live catalog. Remove/lock down after sync.
 @router.get("/api/admin/channel-catalog-sync-once")
 def channel_catalog_sync_once(organization_id: int = 2, catalog_id: int = 1, crop_year: int = 2027):

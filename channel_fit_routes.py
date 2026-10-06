@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import connect, rows_to_dicts
+from climate_service import current_enso_outlook
 
 router = APIRouter()
 

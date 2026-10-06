@@ -65,13 +65,19 @@ def audit_reprocess_source(source_document_id: int, target_farm_id: int):
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
             handle.write(response.content)
             temp_name = handle.name
-        result = ingest_file(
-            Path(temp_name),
-            str(source["original_name"]),
-            str(source["document_type"] or "") or None,
-            reprocess=False,
-            target_farm_id=int(target_farm_id),
-        )
+        try:
+            result = ingest_file(
+                Path(temp_name),
+                str(source["original_name"]),
+                str(source["document_type"] or "") or None,
+                reprocess=False,
+                target_farm_id=int(target_farm_id),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Audit ingest failed: {type(exc).__name__}: {str(exc)[:500]}",
+            ) from exc
         return {
             "audit": True,
             "source_document_id": source_document_id,

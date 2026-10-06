@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS farms (
   farm_key TEXT UNIQUE NOT NULL,
   farm_name TEXT,
   producer_name TEXT,
+  default_tillage TEXT,
+  default_row_spacing TEXT DEFAULT 'NORMAL',
+  default_planting_window TEXT DEFAULT 'NORMAL',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from aph_utils import collapse_production_records, match_identity, record_identity
 from database import connect, rows_to_dicts
 from climate_service import current_enso_outlook
 
@@ -258,54 +259,106 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
     crop = _normalize_crop(crop)
     with connect() as conn:
         direct = rows_to_dicts(conn.execute(
-            "SELECT cr.crop_year,cr.yield_value,cr.approved_yield,e.precipitation_in,e.heat_days_95,e.heat_days_90,e.enso_phase,e.enso_index "
+            "SELECT cr.id,cr.crop_year,cr.crop,cr.practice,cr.planted_acres,cr.yield_value,cr.approved_yield,cr.metadata_json,"
+            "e.precipitation_in,e.heat_days_95,e.heat_days_90,e.enso_phase,e.enso_index,e.metadata_json AS environment_metadata_json "
             "FROM crop_records cr LEFT JOIN field_year_environment e ON e.field_id=? AND e.crop_year=cr.crop_year "
             "WHERE cr.field_id=? AND upper(cr.crop)=? AND cr.yield_value IS NOT NULL ORDER BY cr.crop_year",
             (field_id, field_id, crop),
         ).fetchall())
         linked_raw = rows_to_dicts(conn.execute(
-            "SELECT cr.crop_year,cr.yield_value,cr.approved_yield,cr.metadata_json,m.unit_key,"
-            "e.precipitation_in,e.heat_days_95,e.heat_days_90,e.enso_phase,e.enso_index "
+            "SELECT cr.id,cr.crop_year,cr.crop,cr.practice,cr.planted_acres,cr.yield_value,cr.approved_yield,cr.metadata_json,"
+            "m.unit_key,m.metadata_json AS match_metadata_json,"
+            "e.precipitation_in,e.heat_days_95,e.heat_days_90,e.enso_phase,e.enso_index,e.metadata_json AS environment_metadata_json "
             "FROM aph_unit_field_links l "
             "JOIN aph_unit_matches m ON m.id=l.match_id "
             "JOIN crop_records cr ON cr.source_document_id=m.source_document_id "
             "LEFT JOIN field_year_environment e ON e.field_id=l.field_id AND e.crop_year=cr.crop_year "
             "WHERE l.field_id=? AND m.match_status='confirmed' AND upper(cr.crop)=? "
-            "AND cr.yield_value IS NOT NULL "
-            "ORDER BY cr.crop_year",
+            "AND cr.yield_value IS NOT NULL ORDER BY cr.crop_year",
             (field_id, crop),
         ).fetchall())
-        linked=[]
-        for rec in linked_raw:
-            meta=_loads(rec.get("metadata_json"), {})
-            if str(meta.get("unit_number") or "") == str(rec.get("unit_key") or ""):
-                linked.append(rec)
-        seen=set()
-        rows=[]
-        for r in direct+linked:
-            k=(r.get("crop_year"),r.get("yield_value"))
-            if k in seen: continue
-            seen.add(k); rows.append(r)
+
+    linked = []
+    for rec in linked_raw:
+        if record_identity(rec) == match_identity({
+            "unit_key": rec.get("unit_key"),
+            "metadata_json": rec.get("match_metadata_json"),
+        }):
+            linked.append(rec)
+
+    source_rows = []
+    seen_ids: set[int] = set()
+    for row in direct + linked:
+        rid = int(row.get("id") or 0)
+        if rid and rid in seen_ids:
+            continue
+        if rid:
+            seen_ids.add(rid)
+        source_rows.append(row)
+
+    rows = collapse_production_records(source_rows)
     yields = [float(r["yield_value"]) for r in rows if r.get("yield_value") is not None]
     if not yields:
-        return {"year_count": 0, "average_yield": None, "recent_5yr_average": None, "latest_approved_yield": None, "aph_yield_goal": None, "aph_yield_goal_source": None, "stability_score": None, "hot_dry_sensitivity": None}
+        return {
+            "year_count": 0,
+            "average_yield": None,
+            "recent_5yr_average": None,
+            "latest_approved_yield": None,
+            "aph_yield_goal": None,
+            "aph_yield_goal_source": None,
+            "stability_score": None,
+            "hot_dry_sensitivity": None,
+            "weather_year_count": 0,
+            "stress_year_count": 0,
+            "comparison_year_count": 0,
+            "ignored_or_collapsed_source_rows": len(source_rows),
+        }
+
     avg = mean(yields)
     stability = None
     if len(yields) >= 2 and avg:
         mad = mean(abs(x - avg) for x in yields)
         stability = round(max(0.0, min(100.0, 100.0 - (mad / avg * 180.0))), 0)
 
-    weather_rows = [r for r in rows if r.get("precipitation_in") is not None and r.get("heat_days_95") is not None]
+    # Crop-season stress uses Jun-Aug rainfall when available. Whole-season
+    # rainfall is retained only as a fallback for older rows. Require enough
+    # history and enough observations on both sides before generating a signal.
+    weather_rows = []
+    for row in rows:
+        if row.get("heat_days_95") is None:
+            continue
+        env_meta = _loads(row.get("environment_metadata_json"), {})
+        seasonal_rain = env_meta.get("jun_aug_precipitation_in")
+        if seasonal_rain is None:
+            seasonal_rain = row.get("precipitation_in")
+        if seasonal_rain is None:
+            continue
+        enriched = dict(row)
+        enriched["_stress_rainfall"] = float(seasonal_rain)
+        weather_rows.append(enriched)
+
     sensitivity = None
     stress_years = 0
-    if len(weather_rows) >= 4:
-        rain_med = median(float(r["precipitation_in"]) for r in weather_rows)
+    comparison_years = 0
+    if len(weather_rows) >= 6:
+        rain_med = median(float(r["_stress_rainfall"]) for r in weather_rows)
         heat_med = median(float(r["heat_days_95"]) for r in weather_rows)
-        stress = [float(r["yield_value"]) for r in weather_rows if float(r["precipitation_in"]) <= rain_med and float(r["heat_days_95"]) >= heat_med]
-        normal = [float(r["yield_value"]) for r in weather_rows if not (float(r["precipitation_in"]) <= rain_med and float(r["heat_days_95"]) >= heat_med)]
+        stress = [
+            float(r["yield_value"]) for r in weather_rows
+            if float(r["_stress_rainfall"]) <= rain_med and float(r["heat_days_95"]) >= heat_med
+        ]
+        normal = [
+            float(r["yield_value"]) for r in weather_rows
+            if not (float(r["_stress_rainfall"]) <= rain_med and float(r["heat_days_95"]) >= heat_med)
+        ]
         stress_years = len(stress)
-        if stress and normal and mean(normal) > 0:
-            sensitivity = round(max(-0.5, min(0.5, (mean(normal) - mean(stress)) / mean(normal))), 3)
+        comparison_years = len(normal)
+        if len(stress) >= 2 and len(normal) >= 2 and mean(normal) > 0:
+            downside = (mean(normal) - mean(stress)) / mean(normal)
+            # Do not interpret a small historical sample as proof that heat/dry
+            # conditions are beneficial. Climate can add defensive weight only
+            # when repeatable downside is demonstrated.
+            sensitivity = round(max(0.0, min(0.5, downside)), 3)
 
     enso_groups: dict[str, list[float]] = {}
     for r in rows:
@@ -320,15 +373,13 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
     la = enso_groups.get("La Nina") or []
     comparison = (enso_groups.get("Neutral") or []) + (enso_groups.get("El Nino") or [])
     if len(la) >= 2 and len(comparison) >= 3 and mean(comparison) > 0:
-        enso_downside = round(max(-0.5, min(0.5, (mean(comparison) - mean(la)) / mean(comparison))), 3)
+        enso_downside = round(max(0.0, min(0.5, (mean(comparison) - mean(la)) / mean(comparison))), 3)
 
-    approved_rows = [
-        r for r in rows
-        if r.get("approved_yield") is not None
-    ]
+    approved_rows = [r for r in rows if r.get("approved_yield") is not None]
     approved_rows.sort(key=lambda r: int(r.get("crop_year") or 0))
     latest_approved = float(approved_rows[-1]["approved_yield"]) if approved_rows else None
-    recent_avg = round(mean(yields[-5:]), 1) if yields else None
+    recent_rows = sorted(rows, key=lambda r: int(r.get("crop_year") or 0))[-5:]
+    recent_avg = round(mean(float(r["yield_value"]) for r in recent_rows), 1) if recent_rows else None
     aph_yield_goal = round(latest_approved, 1) if latest_approved is not None else recent_avg
     aph_yield_goal_source = "APH approved yield" if latest_approved is not None else ("APH recent 5-year average" if recent_avg is not None else None)
 
@@ -343,10 +394,11 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
         "hot_dry_sensitivity": sensitivity,
         "weather_year_count": len(weather_rows),
         "stress_year_count": stress_years,
+        "comparison_year_count": comparison_years,
         "enso_yield_profile": enso_yield_profile,
         "la_nina_yield_downside": enso_downside,
+        "ignored_or_collapsed_source_rows": max(0, len(source_rows) - len(rows)),
     }
-
 
 def _aph_production_fit(crop: str, meta: dict[str, Any], tags: set[str], context: dict[str, Any], climate_outlook: dict[str, Any] | None = None) -> tuple[float, list[str]]:
     years = int(context.get("year_count") or 0)

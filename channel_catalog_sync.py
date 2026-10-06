@@ -260,15 +260,14 @@ def channel_catalog_probe(crop: str = "corn", page: int = 0):
 def channel_catalog_client_discovery():
     src = "/_next/static/chunks/pages/%5Bcrop%5D/%5Bbrand%5D/seed-catalog-74c25bf669a9b3e6.js"
     js = _fetch(BAYER_BASE + src).text
-    needles = ["r(58917)", "(0,r(58917)", "58917)", ".$( "]
     hits = []
-    for needle in needles:
+    for needle in ("Q(", "Q.apply", "productsQuery", "serverRbmEnabled"):
         at = 0
-        while len(hits) < 20:
+        while len(hits) < 24:
             p = js.find(needle, at)
             if p < 0:
                 break
-            hits.append({"needle": needle, "snippet": js[max(0,p-1800):p+3200]})
+            hits.append({"needle": needle, "snippet": js[max(0,p-2200):p+3800]})
             at = p + len(needle)
     return {"src": src, "bytes": len(js), "hits": hits}
 

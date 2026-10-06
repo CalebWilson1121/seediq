@@ -116,9 +116,8 @@ def _prepare_graphql_product(raw: dict[str, Any]) -> dict[str, Any]:
     row = dict(raw)
     prefix = str(row.get("hybridPrefix") or "").strip()
     suffix = str(row.get("hybridSuffix") or "").strip()
-    row["title"] = " ".join(x for x in (prefix, suffix) if x).strip()
-    if not row["title"]:
-        row["title"] = str(row.get("seoSlug") or "").strip()
+    row["title"] = prefix or str(row.get("seoSlug") or "").strip()
+    row["titleSuffix"] = suffix or None
     return row
 HEADERS = {
     "User-Agent": "SeedIQCatalogSync/1.0 (+https://seediq-w5-3abe.vercel.app)",
@@ -290,6 +289,7 @@ def _normalized(raw: dict[str, Any], crop: str) -> dict[str, Any]:
         "chu": raw.get("chu"),
         "chu_min": raw.get("chuMin"),
         "chu_max": raw.get("chuMax"),
+        "title_suffix": raw.get("titleSuffix") or raw.get("hybridSuffix"),
     }
     return {
         "product_name": title,

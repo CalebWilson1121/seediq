@@ -501,6 +501,112 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
     return ranked
 
 
+
+def _whole_farm_reason_summary(row: dict[str, Any], rec: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    reasons: list[str] = []
+    irr = str(row.get("irrigation") or "").upper()
+    if irr:
+        reasons.append(irr)
+
+    awc = row.get("weighted_aws150_cm")
+    if awc is not None:
+        if float(awc) < 18:
+            reasons.append(f"low AWC {float(awc):.1f} cm")
+        elif float(awc) >= 25:
+            reasons.append(f"high AWC {float(awc):.1f} cm")
+        else:
+            reasons.append(f"moderate AWC {float(awc):.1f} cm")
+
+    years = int(context.get("year_count") or 0)
+    avg = context.get("average_yield")
+    stability = context.get("stability_score")
+    if years and avg is not None:
+        reasons.append(f"{years}-yr APH avg {float(avg):.0f}")
+    if stability is not None:
+        reasons.append(f"stability {int(stability)}/100")
+
+    sensitivity = context.get("hot_dry_sensitivity")
+    if sensitivity is not None and float(sensitivity) >= 0.05:
+        reasons.append(f"{round(float(sensitivity)*100)}% hot/dry downside")
+
+    enso = context.get("la_nina_yield_downside")
+    if enso is not None and float(enso) >= 0.05:
+        reasons.append(f"{round(float(enso)*100)}% La Nina downside")
+
+    # Product-specific fit reasons are the most important explanation.
+    product_reasons = [
+        str(x) for x in (rec.get("reasons") or [])
+        if x and not str(x).lower().startswith("local maturity")
+    ][:3]
+
+    return {
+        "fit_score": rec.get("fit_score"),
+        "field_signals": reasons[:5],
+        "product_reasons": product_reasons,
+        "aph_points": rec.get("aph_points"),
+        "management_points": rec.get("management_points"),
+        "bayer_trait_points": rec.get("bayer_trait_points"),
+        "aph_context": {
+            "year_count": years,
+            "average_yield": avg,
+            "stability_score": stability,
+            "hot_dry_sensitivity": sensitivity,
+            "la_nina_yield_downside": enso,
+        },
+    }
+
+
+@router.get("/api/farms/{farm_id}/channel-plan-insights")
+def channel_plan_insights(farm_id: int, crop_year: int = 2027):
+    with connect() as conn:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT f.id AS field_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,"
+            "cp.crop,cp.yield_goal,cp.selected_seed_product_id,"
+            "fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,"
+            "fl.centroid_lat,fl.centroid_lon,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window "
+            "FROM fields f JOIN farms fa ON fa.id=f.farm_id "
+            "LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? "
+            "LEFT JOIN field_soils fs ON fs.field_id=f.id "
+            "LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id "
+            "ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true "
+            "WHERE f.farm_id=? AND cp.selected_seed_product_id IS NOT NULL ORDER BY f.name",
+            (crop_year, farm_id),
+        ).fetchall())
+        products = rows_to_dicts(conn.execute(
+            "SELECT * FROM seed_products WHERE brand='Channel' AND active=true AND crop_year=? ORDER BY crop,relative_maturity,product_name",
+            (crop_year,),
+        ).fetchall())
+
+    products_by_crop: dict[str, list[dict[str, Any]]] = {"CORN": [], "SOYBEANS": []}
+    for p in products:
+        pcrop = _normalize_crop(p.get("crop"))
+        if pcrop in products_by_crop:
+            products_by_crop[pcrop].append(p)
+
+    insights = []
+    for row in rows:
+        crop = _normalize_crop(row.get("crop") or row.get("field_crop"))
+        if crop not in {"CORN", "SOYBEANS"}:
+            continue
+        context = _production_context(int(row["field_id"]), crop)
+        row["production_context"] = context
+        ranked = _rank_products(row, products_by_crop.get(crop, []))
+        selected_id = int(row["selected_seed_product_id"])
+        selected = next((x for x in ranked if int(x.get("seed_product_id") or 0) == selected_id), None)
+        if not selected:
+            continue
+        rank = next((i + 1 for i, x in enumerate([z for z in ranked if z.get("location_eligible")]) if int(x.get("seed_product_id") or 0) == selected_id), None)
+        insights.append({
+            "field_id": int(row["field_id"]),
+            "field_name": row.get("name"),
+            "selected_seed_product_id": selected_id,
+            "selected_product_name": selected.get("product_name"),
+            "rank": rank,
+            **_whole_farm_reason_summary(row, selected, context),
+        })
+    return {"farm_id": farm_id, "crop_year": crop_year, "insights": insights}
+
+
 @router.get("/api/fields/{field_id}/channel-fit")
 def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
     with connect() as conn:
@@ -531,7 +637,7 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
         "field": {
             "name": row.get("name"), "acres": row.get("acres"), "crop": crop,
             "irrigation": row.get("irrigation"), "yield_goal": row.get("yield_goal"),
-                "yield_goal_source": yield_goal_source,
+            "yield_goal_source": "manual" if row.get("yield_goal") is not None else None,
             "awc_0_150cm": row.get("weighted_aws150_cm"), "drainage": drainage,
             "centroid_lat": row.get("centroid_lat"), "centroid_lon": row.get("centroid_lon"),
             "maturity_window": maturity_window,

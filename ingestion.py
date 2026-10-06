@@ -154,9 +154,15 @@ def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocumen
 def _prepare_reprocess(existing) -> None:
     document_id = int(existing["id"])
     farm_id = int(existing["farm_id"])
+    doc_type = str(existing.get("document_type") or "").upper()
     with connect() as conn:
-        conn.execute("DELETE FROM field_soils WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
-        conn.execute("DELETE FROM field_locations WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
+        # APH is enrichment only. Reprocessing APH must never touch the mapped
+        # parent geometry or soils. Map-source documents may rebuild geometry.
+        if doc_type in {"MBAR", "SOI"}:
+            conn.execute("DELETE FROM field_soils WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
+            conn.execute("DELETE FROM field_locations WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
+        if doc_type == "APH":
+            conn.execute("DELETE FROM aph_unit_matches WHERE source_document_id=?", (document_id,))
         conn.execute("DELETE FROM source_facts WHERE document_id=?", (document_id,))
         conn.execute("DELETE FROM crop_records WHERE source_document_id=?", (document_id,))
         conn.execute("DELETE FROM documents WHERE id=?", (document_id,))
@@ -328,6 +334,16 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             conn.execute("INSERT INTO source_facts(farm_id,document_id,entity_type,entity_key,field_name,value_text,value_numeric,unit,source_locator,confidence) VALUES(?,?,?,?,?,?,?,?,?,?)", (farm_id, document_id, fact.entity_type, fact.entity_key, fact.field_name, vtext, vnum, fact.unit, fact.source_locator, fact.confidence))
 
         prospect_id = _upsert_prospect(conn, farm_id, document_id, parsed)
+        if map_first_aph and prospect_id is not None:
+            mapped_acres_row = conn.execute(
+                "SELECT COALESCE(SUM(acres),0) AS acres FROM fields WHERE farm_id=?",
+                (farm_id,),
+            ).fetchone()
+            mapped_acres = float(mapped_acres_row["acres"] or 0)
+            conn.execute(
+                "UPDATE prospects SET total_acres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (round(mapped_acres, 2), prospect_id),
+            )
 
     if parsed.document_type in {"MBAR", "SOI"} and field_boundaries:
         from soil_service import set_exact_boundary

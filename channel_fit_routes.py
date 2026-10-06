@@ -89,6 +89,128 @@ def _location_eligibility(crop: str, maturity: float | None, latitude: float | N
     return True, f"Inside local maturity window ({window['min']}–{window['max']} RM)", window
 
 
+def _characteristic_map(meta: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for group in meta.get("characteristics") or []:
+        if not isinstance(group, dict):
+            continue
+        for item in group.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            cid = str(item.get("characteristicId") or "").upper().strip()
+            name = str(item.get("characteristicName") or "").upper().strip()
+            value = item.get("value")
+            if value in (None, ""):
+                continue
+            if cid:
+                out[cid] = str(value).strip()
+            if name:
+                out[name] = str(value).strip()
+    return out
+
+
+def _numeric_rating(chars: dict[str, str], *keys: str) -> float | None:
+    for key in keys:
+        value = chars.get(key.upper())
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _quality_points(rating: float | None, max_points: float) -> float:
+    # Bayer numeric agronomic scales in the synced Channel feed use lower numbers
+    # for stronger performance. Keep this conservative and capped.
+    if rating is None:
+        return 0.0
+    rating = max(1.0, min(9.0, float(rating)))
+    return max(0.0, max_points * ((9.0 - rating) / 8.0))
+
+
+def _bayer_trait_fit(
+    crop: str,
+    meta: dict[str, Any],
+    awc: float | None,
+    drainage: dict[str, Any],
+    slope: float | None,
+    maturity: float | None,
+    maturity_window: dict[str, float] | None,
+) -> tuple[float, list[str]]:
+    crop = _normalize_crop(crop)
+    chars = _characteristic_map(meta)
+    points = 0.0
+    reasons: list[str] = []
+
+    # Within the hard maturity gate, reward products near the field's local
+    # maturity target without making maturity the entire recommendation.
+    if maturity is not None and maturity_window is not None:
+        target = maturity_window["target"]
+        half_span = max(0.4, (maturity_window["max"] - maturity_window["min"]) / 2.0)
+        distance = abs(float(maturity) - target)
+        maturity_points = max(0.0, 10.0 * (1.0 - distance / half_span))
+        points += maturity_points
+        if maturity_points >= 6:
+            reasons.append(f"RM {float(maturity):g} is close to the local {target:g} RM target")
+
+    drainage_text = " ".join(str(k).lower() for k in (drainage or {}).keys())
+    wet = any(x in drainage_text for x in ("poor", "somewhat poor", "very poor"))
+    well = any(x in drainage_text for x in ("well drained", "moderately well drained", "excessively drained"))
+
+    if crop == "SOYBEANS":
+        stand = _numeric_rating(chars, "STANDABILITY_USCB", "STANDABILITY")
+        emerge = _numeric_rating(chars, "EMERGENCE_USCB", "EMERGENCE")
+        stand_pts = _quality_points(stand, 8.0)
+        emerge_pts = _quality_points(emerge, 4.0)
+        points += stand_pts + emerge_pts
+        if stand is not None and stand <= 3:
+            reasons.append(f"Bayer standability rating {stand:g} supports field fit")
+        if emerge is not None and emerge <= 3:
+            reasons.append(f"Bayer emergence rating {emerge:g} supports establishment")
+
+        if wet:
+            prr = _numeric_rating(chars, "PRR_TOLERANCE_USCB", "PRR FIELD TOLERANCE")
+            prr_pts = _quality_points(prr, 12.0)
+            gene = chars.get("PRR_GENE_USCB") or chars.get("PRR GENE")
+            points += prr_pts
+            if gene and gene.lower() not in {"susc", "susceptible", "-"}:
+                points += 4.0
+                reasons.append(f"PRR gene {gene} adds protection on wetter ground")
+            if prr is not None and prr <= 4:
+                reasons.append(f"Bayer PRR field tolerance rating {prr:g} fits drainage risk")
+        elif well:
+            # Avoid over-weighting wet-soil disease packages on well-drained fields.
+            points += min(2.0, stand_pts * 0.25)
+
+    elif crop == "CORN":
+        drought = _numeric_rating(chars, "DROUGHT_TOLERANCE_USCB", "DROUGHT TOLERANCE")
+        root = _numeric_rating(chars, "ROOT_STRENGTH_USCB", "ROOT STRENGTH")
+        stalk = _numeric_rating(chars, "STALK_STRENGTH_USCB", "STALK STRENGTH")
+        emerge = _numeric_rating(chars, "EMERGENCE_USCB", "EMERGENCE")
+
+        if awc is not None and awc < 18:
+            pts = _quality_points(drought, 14.0)
+            points += pts
+            if drought is not None and drought <= 4:
+                reasons.append(f"Bayer drought rating {drought:g} fits lower-AWC soil")
+        elif awc is not None and awc < 24:
+            points += _quality_points(drought, 7.0)
+
+        root_weight = 8.0 if (slope or 0) >= 4 or wet else 5.0
+        root_pts = _quality_points(root, root_weight)
+        stalk_pts = _quality_points(stalk, 5.0)
+        emerge_pts = _quality_points(emerge, 3.0)
+        points += root_pts + stalk_pts + emerge_pts
+        if root is not None and root <= 3 and root_weight >= 8:
+            reasons.append(f"Bayer root strength rating {root:g} fits slope/drainage pressure")
+        if stalk is not None and stalk <= 3:
+            reasons.append(f"Bayer stalk strength rating {stalk:g} supports harvestability")
+
+    return round(points, 1), reasons[:4]
+
+
 def _fit_score(crop: str, irrigation: str | None, awc: float | None, drainage: dict[str, Any], yield_goal: float | None, tags: set[str]) -> tuple[float, list[str]]:
     score = 55.0
     reasons: list[str] = []
@@ -136,6 +258,17 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             row.get("yield_goal"),
             tags,
         )
+        trait_points, trait_reasons = _bayer_trait_fit(
+            crop,
+            meta,
+            row.get("weighted_aws150_cm"),
+            drainage,
+            row.get("weighted_slope_pct"),
+            p.get("relative_maturity"),
+            maturity_window,
+        )
+        score = round(max(0, min(99, score + trait_points)), 1)
+        reasons = trait_reasons + reasons
         if location_reason:
             reasons = [location_reason] + reasons
         pop = _population(
@@ -153,6 +286,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             "relative_maturity": p.get("relative_maturity"),
             "trait_package": p.get("trait_package"),
             "fit_score": score,
+            "bayer_trait_points": trait_points,
             "location_eligible": eligible,
             "location_reason": location_reason,
             "maturity_window": maturity_window,

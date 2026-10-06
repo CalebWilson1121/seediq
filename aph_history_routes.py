@@ -15,7 +15,7 @@ router = APIRouter()
 
 
 class ConfirmAPHMatchRequest(BaseModel):
-    field_id: int
+    field_ids: list[int]
 
 
 def _loads(value: Any, default):
@@ -141,25 +141,57 @@ def aph_matches(farm_id: int):
             "WHERE farm_id=? ORDER BY name",
             (farm_id,),
         ).fetchall())
+    with connect() as conn:
+        links = rows_to_dicts(conn.execute(
+            "SELECT l.match_id,l.field_id FROM aph_unit_field_links l "
+            "JOIN aph_unit_matches m ON m.id=l.match_id WHERE m.farm_id=? ORDER BY l.match_id,l.field_id",
+            (farm_id,),
+        ).fetchall())
+    link_map: dict[int,list[int]] = {}
+    for link in links:
+        link_map.setdefault(int(link["match_id"]), []).append(int(link["field_id"]))
+    field_acres = {int(f["id"]): float(f.get("acres") or 0) for f in fields}
     for m in matches:
         m["metadata"] = _loads(m.pop("metadata_json", None), {})
+        ids = link_map.get(int(m["id"]), [])
+        if not ids and m.get("field_id"):
+            ids = [int(m["field_id"])]
+        m["field_ids"] = ids
+        m["selected_acres"] = round(sum(field_acres.get(fid,0) for fid in ids),2)
     return {"farm_id": farm_id, "matches": matches, "fields": fields}
 
 
 @router.put("/api/aph-matches/{match_id}/confirm")
 def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
+    field_ids = sorted({int(x) for x in req.field_ids if int(x) > 0})
+    if not field_ids:
+        raise HTTPException(status_code=400, detail="Select at least one mapped field")
     with connect() as conn:
         match = conn.execute("SELECT * FROM aph_unit_matches WHERE id=?", (match_id,)).fetchone()
         if not match:
             raise HTTPException(status_code=404, detail="APH unit match not found")
-        field = conn.execute("SELECT id,farm_id,name FROM fields WHERE id=?", (req.field_id,)).fetchone()
-        if not field or int(field["farm_id"]) != int(match["farm_id"]):
-            raise HTTPException(status_code=400, detail="Field does not belong to this farm")
+        placeholders = ",".join("?" for _ in field_ids)
+        fields = rows_to_dicts(conn.execute(
+            f"SELECT id,farm_id,name,acres FROM fields WHERE id IN ({placeholders})",
+            tuple(field_ids),
+        ).fetchall())
+        if len(fields) != len(field_ids) or any(int(f["farm_id"]) != int(match["farm_id"]) for f in fields):
+            raise HTTPException(status_code=400, detail="Every selected field must belong to this farm")
+
+        conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
+        for fid in field_ids:
+            conn.execute(
+                "INSERT INTO aph_unit_field_links(match_id,field_id) VALUES(?,?) ON CONFLICT(match_id,field_id) DO NOTHING",
+                (match_id,fid),
+            )
+        primary = field_ids[0] if len(field_ids)==1 else None
         conn.execute(
-            "UPDATE aph_unit_matches SET field_id=?,match_status='confirmed',confidence=1.0,method='manual_confirm',"
-            "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (req.field_id, match_id),
+            "UPDATE aph_unit_matches SET field_id=?,match_status='confirmed',confidence=1.0,method=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (primary, "manual_multi_confirm" if len(field_ids)>1 else "manual_confirm", match_id),
         )
+
+        # Keep crop_records unassigned for multi-field units. History is linked
+        # through aph_unit_field_links to avoid duplicating farm production rows.
         records = rows_to_dicts(conn.execute(
             "SELECT id,metadata_json FROM crop_records WHERE source_document_id=?",
             (match["source_document_id"],),
@@ -167,14 +199,16 @@ def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
         updated = 0
         for rec in records:
             if _unit_from_record(rec) == str(match["unit_key"]):
-                conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (req.field_id, rec["id"]))
+                conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
                 updated += 1
-    weather = _enrich_weather_for_field(req.field_id)
+
+    weather = [_enrich_weather_for_field(fid) for fid in field_ids]
     return {
         "match_id": match_id,
-        "field_id": req.field_id,
-        "field_name": field["name"],
-        "crop_records_attached": updated,
+        "field_ids": field_ids,
+        "fields": fields,
+        "selected_acres": round(sum(float(f.get("acres") or 0) for f in fields),2),
+        "crop_records_linked": updated,
         "weather": weather,
     }
 
@@ -217,7 +251,13 @@ def farm_production_profile(farm_id: int):
             (farm_id,),
         ).fetchall())
         records = rows_to_dicts(conn.execute(
-            "SELECT * FROM crop_records WHERE farm_id=? AND field_id IS NOT NULL ORDER BY field_id,crop_year",
+            "SELECT * FROM crop_records WHERE farm_id=? ORDER BY crop_year",
+            (farm_id,),
+        ).fetchall())
+        aph_links = rows_to_dicts(conn.execute(
+            "SELECT l.field_id,m.source_document_id,m.unit_key "
+            "FROM aph_unit_field_links l JOIN aph_unit_matches m ON m.id=l.match_id "
+            "WHERE m.farm_id=? AND m.match_status='confirmed'",
             (farm_id,),
         ).fetchall())
         env = rows_to_dicts(conn.execute(
@@ -232,8 +272,16 @@ def farm_production_profile(farm_id: int):
         ).fetchone()
 
     rec_by_field: dict[int, list[dict[str, Any]]] = {}
+    linked_keys: dict[tuple[int,str], list[int]] = {}
+    for l in aph_links:
+        linked_keys.setdefault((int(l["source_document_id"]), str(l["unit_key"])), []).append(int(l["field_id"]))
     for r in records:
-        rec_by_field.setdefault(int(r["field_id"]), []).append(r)
+        linked = linked_keys.get((int(r["source_document_id"]), str(_unit_from_record(r) or "")), [])
+        if linked:
+            for fid in linked:
+                rec_by_field.setdefault(fid, []).append(r)
+        elif r.get("field_id") is not None:
+            rec_by_field.setdefault(int(r["field_id"]), []).append(r)
     env_by_key = {(int(e["field_id"]), int(e["crop_year"])): e for e in env}
 
     out_fields = []

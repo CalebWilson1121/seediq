@@ -4,7 +4,7 @@ from pathlib import Path
 from pypdf import PdfReader
 from models import CropRecord, ParsedDocument, ParsedField, SourceFact
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 def _num(v):
     if v is None:
@@ -105,6 +105,30 @@ def _parse_unit(block, page_number):
         **loc,
     }
 
+def _summary_acres(text: str) -> dict[tuple[str, str], float]:
+    """Read current reported acres from NAU's Production Reporting Unit Summary.
+
+    Detailed APH history can contain years with no planted-acre value, so the
+    current summary is the safer acreage fallback for match review.
+    """
+    out: dict[tuple[str, str], float] = {}
+    header = re.compile(
+        r"(?m)^(CORN|SOYBEANS)\n[^\n]+\n([0-9]{4}-[0-9]{4}-[0-9]{3})\n[A-Z]{1,3}\n\d{3}\n[^\n]+\n"
+    )
+    matches = list(header.finditer(text))
+    for idx, match in enumerate(matches):
+        crop = match.group(1).upper()
+        unit = match.group(2)
+        stop = matches[idx + 1].start() if idx + 1 < len(matches) else min(len(text), match.end() + 900)
+        block = text[match.end():stop]
+        acre_match = re.search(r"(?m)^([0-9][0-9,]*\.[0-9]{2})\s+[0-9]+(?:\.[0-9]+)?\s+[0-9][0-9,]*(?:\.[0-9]+)?", block)
+        if acre_match:
+            acres = _num(acre_match.group(1))
+            if acres is not None:
+                out[(crop, unit)] = acres
+    return out
+
+
 def looks_like_nau_aph(text):
     s = text[:20000].lower()
     return "actual production history (aph) database" in s and "naucountry.com" in s
@@ -113,13 +137,16 @@ def parse_nau_aph_pdf(path: Path):
     pages = [p.extract_text() or "" for p in PdfReader(str(path)).pages]
     full = "\n".join(pages)
     producer = _first(r"Insured Name:\s*([^\n]+?)(?:\s+Agency Code:|$)", full) or _first(r"Insured Information\s*\n([^\n]+)", full)
-    policy = _first(r"Policy\s*#?:?\s*([A-Z0-9-]+)", full)
+    policy = _first(r"Policy\s*(?:Number|#)\s*:?\s*(?:\\n\\s*)?([A-Z0-9-]{6,})", full)
     out = ParsedDocument(document_type="APH", producer_name=producer, farm_name=producer, policy_number=policy, raw_preview=full[:6000])
+    summary_acres = _summary_acres(full)
     units = []
     for page_number, text in enumerate(pages, 1):
         for block in text.split("Crop Plan\n")[1:]:
             u = _parse_unit(block, page_number)
             if u:
+                if u.get("acres") is None:
+                    u["acres"] = summary_acres.get((str(u.get("crop") or "").upper(), str(u.get("unit") or "")))
                 units.append(u)
     seen = set()
     for u in units:

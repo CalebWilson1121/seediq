@@ -77,6 +77,7 @@ def _build_field_book_data(token: str):
         }
         context = _production_context(int(row.get("field_id")), crop)
         row["production_context"] = context
+        row["climate_outlook"] = outlook
         ranked = _rank_products(row, [product])
         selected_fit = ranked[0] if ranked else {}
         fit_score = selected_fit.get("fit_score", 0)

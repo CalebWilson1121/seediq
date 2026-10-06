@@ -27,11 +27,11 @@ def _insert_field(farm_id: int, name: str, acres: float | None, irrigation: str 
         "management_field": True,
     }
     with connect() as conn:
-        farm = conn.execute("SELECT id FROM farms WHERE id=?", (farm_id,)).fetchone()
+        farm = conn.execute("SELECT id,state,county FROM farms WHERE id=?", (farm_id,)).fetchone()
         if not farm:
             raise KeyError(f"Farm {farm_id} not found")
-        sql = "INSERT INTO fields(farm_id,field_key,name,acres,irrigation,metadata_json) VALUES(?,?,?,?,?,?)"
-        params = (farm_id, field_key, name, acres, irrigation, json_dumps(metadata))
+        sql = "INSERT INTO fields(farm_id,field_key,name,acres,state,county,irrigation,metadata_json) VALUES(?,?,?,?,?,?,?,?)"
+        params = (farm_id, field_key, name, acres, farm.get("state"), farm.get("county"), irrigation, json_dumps(metadata))
         if backend_name() == "supabase-postgres":
             row = conn.execute(sql + " RETURNING id", params).fetchone()
             return int(row["id"])

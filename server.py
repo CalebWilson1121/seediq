@@ -364,8 +364,8 @@ def create_prospect(req: ProspectCreateRequest):
                 ).fetchone()
                 farm_id = int(farm["id"])
                 prospect = conn.execute(
-                    "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json,organization_id) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
-                    (farm_id, farm_name, "new", "manual_create", 0, "[]", '{"created_from":"scratch"}', req.organization_id),
+                    "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json,organization_id) VALUES(?,?,?,?,?,'[]'::jsonb,'{\"created_from\":\"scratch\"}'::jsonb,?) RETURNING id",
+                    (farm_id, farm_name, "new", "manual_create", 0, req.organization_id),
                 ).fetchone()
                 prospect_id = int(prospect["id"])
             else:

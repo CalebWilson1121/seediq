@@ -52,16 +52,34 @@ def current_enso_outlook(crop_year: int | None = None) -> dict[str, Any]:
             issued = m.group(1)
 
         table: dict[str, dict[str, int]] = {}
-        for season, la, neutral, el in re.findall(
-            r"\b([A-Z]{3})\s+(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})\b",
-            probs_text,
-        ):
+        # NOAA renders rows like:
+        # "MAM Mar Apr May 0 18 82"
+        # so allow the three month labels between season code and percentages.
+        row_pattern = re.compile(
+            r"\b([A-Z]{3})\s+(?:[A-Za-z]{3}\s+){3}(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})\b"
+        )
+        for season, la, neutral, el in row_pattern.findall(probs_text):
             if season not in table:
                 table[season] = {
                     "la_nina_pct": int(la),
                     "neutral_pct": int(neutral),
                     "el_nino_pct": int(el),
                 }
+
+        # Defensive fallback if NOAA changes the month-label markup but keeps
+        # the same visible table row structure.
+        if not table:
+            for season in ("ASO","SON","OND","NDJ","DJF","JFM","FMA","MAM","AMJ","MJJ","JJA","JAS"):
+                m = re.search(
+                    rf"\b{season}\b[^0-9]{{0,50}}(\d{{1,3}})\s+(\d{{1,3}})\s+(\d{{1,3}})\b",
+                    probs_text,
+                )
+                if m:
+                    table[season] = {
+                        "la_nina_pct": int(m.group(1)),
+                        "neutral_pct": int(m.group(2)),
+                        "el_nino_pct": int(m.group(3)),
+                    }
 
         status = None
         sm = re.search(r"ENSO Alert System Status:\s*([^:]+?)(?=Synopsis:|Synopsis|$)", disc_text, re.I)

@@ -95,6 +95,14 @@ CREATE TABLE IF NOT EXISTS aph_unit_matches (
   UNIQUE(source_document_id, unit_key)
 );
 
+CREATE TABLE IF NOT EXISTS aph_unit_field_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id INTEGER NOT NULL REFERENCES aph_unit_matches(id) ON DELETE CASCADE,
+  field_id INTEGER NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(match_id, field_id)
+);
+
 CREATE TABLE IF NOT EXISTS field_year_environment (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   field_id INTEGER NOT NULL REFERENCES fields(id) ON DELETE CASCADE,

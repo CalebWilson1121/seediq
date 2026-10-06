@@ -101,34 +101,41 @@ def create_manual_field(farm_id: int, req: ManualFieldRequest):
                 "UPDATE fields SET metadata_json=?::jsonb WHERE id=?",
                 (json_dumps(_boundary_edit_metadata(req.base_boundary_geojson or req.boundary_geojson, req.cut_polygons, req.split_parent_field_id)), field_id),
             )
-        try:
-            location = set_exact_boundary(field_id, req.boundary_geojson)
-            soil = enrich_field(field_id, force=True) if req.enrich_soils else None
-            if req.acres is not None:
-                with connect() as conn:
-                    conn.execute(
-                        "UPDATE fields SET acres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                        (float(req.acres), field_id),
-                    )
-            elif soil and soil.get("total_area_acres"):
-                with connect() as conn:
-                    conn.execute(
-                        "UPDATE fields SET acres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                        (float(soil["total_area_acres"]), field_id),
-                    )
-            _refresh_prospect_acres(farm_id)
+        location = set_exact_boundary(field_id, req.boundary_geojson)
+        if req.acres is not None:
             with connect() as conn:
-                field = conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
-            return {
-                "field": row_to_dict(field),
-                "location": location,
-                "soil": soil,
-                "boundary_source": "manual_draw",
-            }
-        except Exception:
+                conn.execute(
+                    "UPDATE fields SET acres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (float(req.acres), field_id),
+                )
+        soil = None
+        soil_warning = None
+        if req.enrich_soils:
+            try:
+                soil = enrich_field(field_id, force=True)
+            except Exception as exc:
+                soil_warning = f"Field saved, but SSURGO needs retry: {str(exc)[:220]}"
+                with connect() as conn:
+                    conn.execute("DELETE FROM field_soils WHERE field_id=?", (field_id,))
+        elif req.acres is None:
+            soil_warning = "Field saved without soil enrichment."
+
+        if req.acres is None and soil and soil.get("total_area_acres"):
             with connect() as conn:
-                conn.execute("DELETE FROM fields WHERE id=?", (field_id,))
-            raise
+                conn.execute(
+                    "UPDATE fields SET acres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (float(soil["total_area_acres"]), field_id),
+                )
+        _refresh_prospect_acres(farm_id)
+        with connect() as conn:
+            field = conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
+        return {
+            "field": row_to_dict(field),
+            "location": location,
+            "soil": soil,
+            "soil_warning": soil_warning,
+            "boundary_source": "manual_draw",
+        }
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -159,20 +166,9 @@ def update_field_boundary(field_id: int, req: FieldBoundaryUpdateRequest):
         if not name:
             raise ValueError("Field name is required")
 
-        try:
-            location = set_exact_boundary(field_id, req.boundary_geojson)
-            soil = enrich_field(field_id, force=True) if req.enrich_soils else None
-        except Exception:
-            # Never leave a saved field pointing at a failed edit. Restore its
-            # previous boundary if USDA enrichment rejects the new geometry.
-            if old_location and old_location.get("boundary_geojson"):
-                from soil_service import _loads
-                set_exact_boundary(field_id, _loads(old_location.get("boundary_geojson"), {}))
-            raise
+        location = set_exact_boundary(field_id, req.boundary_geojson)
 
         # Geometry-calculated acres are authoritative for hand edits/cuts.
-        # SSURGO intersection acreage is descriptive soil coverage, not the
-        # canonical management-field acreage.
         final_acres = float(req.acres) if req.acres is not None else float(field.get("acres") or 0)
 
         existing_meta = {}
@@ -186,18 +182,33 @@ def update_field_boundary(field_id: int, req: FieldBoundaryUpdateRequest):
             "cut_polygons": req.cut_polygons or [],
         }
         existing_meta["boundary_source"] = "edited_boundary"
+        if req.split_parent_field_id is not None:
+            existing_meta["split_parent_field_id"] = int(req.split_parent_field_id)
+            existing_meta["split_created"] = True
+
         with connect() as conn:
             conn.execute(
                 "UPDATE fields SET name=?,acres=?,irrigation=?,metadata_json=?::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (name, final_acres, irrigation, json_dumps(existing_meta), field_id),
             )
+            # Never leave stale soil values tied to an old boundary.
+            conn.execute("DELETE FROM field_soils WHERE field_id=?", (field_id,))
             updated = conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
+
+        soil = None
+        soil_warning = None
+        if req.enrich_soils:
+            try:
+                soil = enrich_field(field_id, force=True)
+            except Exception as exc:
+                soil_warning = f"Boundary saved. SSURGO needs retry: {str(exc)[:220]}"
 
         _refresh_prospect_acres(int(field["farm_id"]))
         return {
             "field": row_to_dict(updated),
             "location": location,
             "soil": soil,
+            "soil_warning": soil_warning,
             "boundary_source": "edited_boundary",
         }
     except KeyError as exc:
@@ -257,8 +268,15 @@ def delete_split_field(field_id: int):
 
         merged_geo = mapping(merged)
         parent_location = set_exact_boundary(int(parent_id), merged_geo)
-        parent_soil = enrich_field(int(parent_id), force=True)
         restored_acres = float(parent.get("acres") or 0) + float(child.get("acres") or 0)
+        parent_soil = None
+        soil_warning = None
+        with connect() as conn:
+            conn.execute("DELETE FROM field_soils WHERE field_id=?", (int(parent_id),))
+        try:
+            parent_soil = enrich_field(int(parent_id), force=True)
+        except Exception as exc:
+            soil_warning = f"Split restored. SSURGO needs retry: {str(exc)[:220]}"
 
         with connect() as conn:
             pmeta = _json_obj(parent.get("metadata_json"))
@@ -277,6 +295,7 @@ def delete_split_field(field_id: int):
             "restored_parent_acres": round(restored_acres, 2),
             "location": parent_location,
             "soil": parent_soil,
+            "soil_warning": soil_warning,
         }
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

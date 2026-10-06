@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from database import connect, row_to_dict, rows_to_dicts
-from channel_fit_routes import _fit_score, _loads
+from channel_fit_routes import _loads, _rank_products
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -36,14 +36,14 @@ def _build_field_book_data(token: str):
             raise HTTPException(status_code=404, detail="Proposal not found")
         proposal = row_to_dict(proposal_row) or {}
         rows = conn.execute(
-            "SELECT f.id AS field_id,f.name AS field_name,f.acres,f.irrigation,"
+            "SELECT f.id AS field_id,f.name AS field_name,f.acres,f.crop AS field_crop,f.irrigation,"
             "cp.crop,cp.yield_goal,cp.target_population,cp.seed_price_per_unit,cp.seeds_per_unit,"
             "cp.units_required,cp.seed_cost_per_acre,cp.total_seed_cost,cp.pricing_source,cp.selected_seed_product_id,"
-            "sp.product_name,sp.brand,sp.trait_package,sp.relative_maturity,sp.placement_text,sp.metadata_json,"
+            "sp.id AS seed_product_id,sp.product_name,sp.brand,sp.trait_package,sp.relative_maturity,sp.placement_text,sp.metadata_json,sp.unit_size_seeds,sp.source_url,"
             "fl.boundary_geojson,fl.centroid_lat,fl.centroid_lon,fl.township_range,fl.section,"
             "fs.dominant_muname,fs.dominant_musym,fs.weighted_aws150_cm,fs.weighted_slope_pct,"
-            "fs.drainage_summary_json,fs.hydrologic_group_summary_json "
-            "FROM fields f "
+            "fs.drainage_summary_json,fs.hydrologic_group_summary_json,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window "
+            "FROM fields f JOIN farms fa ON fa.id=f.farm_id "
             "JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? "
             "JOIN seed_products sp ON sp.id=cp.selected_seed_product_id "
             "LEFT JOIN field_locations fl ON fl.id=(SELECT x.id FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) "
@@ -61,18 +61,22 @@ def _build_field_book_data(token: str):
         meta = _loads(row.get("metadata_json"), {})
         if not isinstance(meta, dict):
             meta = {}
-        raw_tags = meta.get("tags", [])
-        if not isinstance(raw_tags, (list, tuple, set)):
-            raw_tags = []
-        tags = {str(x).lower() for x in raw_tags}
-        fit_score, reasons = _fit_score(
-            crop,
-            row.get("irrigation"),
-            row.get("weighted_aws150_cm"),
-            drainage,
-            row.get("yield_goal"),
-            tags,
-        )
+        product = {
+            "id": row.get("seed_product_id"),
+            "product_name": row.get("product_name"),
+            "brand": row.get("brand"),
+            "crop": crop,
+            "relative_maturity": row.get("relative_maturity"),
+            "trait_package": row.get("trait_package"),
+            "placement_text": row.get("placement_text"),
+            "metadata_json": row.get("metadata_json"),
+            "unit_size_seeds": row.get("unit_size_seeds"),
+            "source_url": row.get("source_url"),
+        }
+        ranked = _rank_products(row, [product])
+        selected_fit = ranked[0] if ranked else {}
+        fit_score = selected_fit.get("fit_score", 0)
+        reasons = selected_fit.get("reasons", [])
         hydro = _loads(row.get("hydrologic_group_summary_json"), {})
         if not isinstance(hydro, dict):
             hydro = {}
@@ -97,6 +101,10 @@ def _build_field_book_data(token: str):
             "placement": row.get("placement_text"),
             "fit_score": fit_score,
             "reasons": reasons,
+            "location_eligible": selected_fit.get("location_eligible"),
+            "location_reason": selected_fit.get("location_reason"),
+            "bayer_trait_points": selected_fit.get("bayer_trait_points"),
+            "management_points": selected_fit.get("management_points"),
             "boundary_geojson": _boundary(row.get("boundary_geojson")),
             "centroid_lat": row.get("centroid_lat"),
             "centroid_lon": row.get("centroid_lon"),
@@ -123,7 +131,7 @@ def _build_field_book_data(token: str):
         "field_count": len(fields),
         "planned_acres": round(sum(float(x.get("acres") or 0) for x in fields), 2),
         "estimated_seed_value": round(sum(float(x.get("total_seed_cost") or 0) for x in fields), 2),
-        "method": "SeedIQ deterministic field fit using crop, IRR/NIRR, SSURGO soil attributes, yield goal and published product positioning.",
+        "method": "SeedIQ full field-fit engine using location/maturity eligibility, SSURGO soil, IRR/NIRR, Bayer agronomic ratings, farm management defaults and yield environment.",
         "population_note": "Planting populations are SeedIQ planning recommendations and should be confirmed by the dealer/agronomist for local conditions.",
     }
 

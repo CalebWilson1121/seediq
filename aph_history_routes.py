@@ -583,6 +583,6 @@ def farm_production_profile(farm_id: int):
             "confirmed_units": int(match_counts["confirmed"] or 0) if match_counts else 0,
         },
         "fields": out_fields,
-        "weather_source": "Open-Meteo ERA5-Land historical reanalysis, Apr 1–Oct 15",
+        "weather_source": "Open-Meteo ERA5 historical reanalysis, Apr 1–Oct 15",
         "enso_source": "NOAA CPC RONI (primary) + ONI; SeedIQ crop-season phase uses mean MJJ/JJA/JAS",
     }

@@ -233,6 +233,32 @@ def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> 
     return sorted(out, key=lambda x: (-x["score"], abs(x["identity_acres"] - x["aph_acres"])))
 
 
+def _norm_location_token(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", str(value or "").upper())
+
+
+def _norm_section(value: Any) -> str:
+    s = re.sub(r"\D+", "", str(value or ""))
+    return str(int(s)) if s else ""
+
+
+def _norm_field_name(value: Any) -> str:
+    s = str(value or "").upper()
+    s = re.sub(r"\s*[—-]\s*FIELD\s+\d+\s*$", "", s)
+    s = re.sub(r"\bFIELD\s+\d+\s*$", "", s)
+    s = re.sub(r"[^A-Z0-9]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _mapped_meta(field: dict[str, Any]) -> dict[str, Any]:
+    try:
+        import json
+        value = field.get("metadata_json")
+        return value if isinstance(value, dict) else json.loads(value or "{}")
+    except Exception:
+        return {}
+
+
 def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> tuple[dict[str, int], int]:
     mapped_fields = [dict(r) for r in conn.execute(
         "SELECT id,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation,metadata_json FROM fields WHERE farm_id=? ORDER BY name",
@@ -251,11 +277,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
         # one APH unit to one or many physical fields without relying on acreage.
         direct_unit_fields = []
         for mf in mapped_fields:
-            try:
-                import json
-                mf_meta = mf.get("metadata_json") if isinstance(mf.get("metadata_json"), dict) else json.loads(mf.get("metadata_json") or "{}")
-            except Exception:
-                mf_meta = {}
+            mf_meta = _mapped_meta(mf)
             mapped_unit = str(mf_meta.get("insurance_unit_number") or "").strip()
             if not mapped_unit or mapped_unit != unit_number:
                 continue
@@ -269,18 +291,78 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
                 continue
             direct_unit_fields.append(int(mf["id"]))
 
+        # Crop rotation can change the current SOI unit number even though the
+        # physical FSA fields are the same. Use the APH summary's FSA farm +
+        # PLSS section + IRR/NIRR + common farm name as the second identity
+        # bridge, then require the mapped-field acreage group to reconcile.
+        location_group_fields: list[int] = []
+        location_group_acres = 0.0
+        location_group_variance_pct = None
+        aph_farm_number = str(meta.get("fsa_farm_number") or "").strip()
+        aph_tr = _norm_location_token(meta.get("township_range"))
+        aph_section = _norm_section(meta.get("section"))
+        aph_name = _norm_field_name(meta.get("farm_name") or pf.name)
+        aph_practice_bucket = _norm_practice(pf.practice or pf.irrigation)
+        aph_acres_value = float(pf.acres or 0)
+
+        if aph_farm_number and aph_tr and aph_section:
+            location_candidates = []
+            for mf in mapped_fields:
+                mf_meta = _mapped_meta(mf)
+                if str(mf.get("farm_number") or "").strip() != aph_farm_number:
+                    continue
+                if _norm_location_token(mf_meta.get("township_range")) != aph_tr:
+                    continue
+                if _norm_section(mf_meta.get("legal_section")) != aph_section:
+                    continue
+                mapped_practice_bucket = _norm_practice(
+                    mf_meta.get("source_practice") or mf.get("practice") or mf.get("irrigation")
+                )
+                if aph_practice_bucket and mapped_practice_bucket and aph_practice_bucket != mapped_practice_bucket:
+                    continue
+                location_candidates.append(mf)
+
+            if aph_name:
+                same_name = [mf for mf in location_candidates if _norm_field_name(mf.get("name")) == aph_name]
+                if same_name:
+                    location_candidates = same_name
+
+            if location_candidates:
+                location_group_fields = sorted({int(mf["id"]) for mf in location_candidates})
+                location_group_acres = round(sum(float(mf.get("acres") or 0) for mf in location_candidates), 2)
+                if aph_acres_value > 0:
+                    location_group_variance_pct = abs(location_group_acres - aph_acres_value) / aph_acres_value * 100.0
+
         candidates = _aph_match_candidates(pf, mapped_fields)
         top = candidates[0] if candidates else None
         auto_field_id = None
         status = "unmatched"
         method = "needs_confirmation"
         confidence = top["score"] if top else 0.0
+        confirmed_group_fields: list[int] = []
         if direct_unit_fields:
             direct_unit_fields = sorted(set(direct_unit_fields))
+            confirmed_group_fields = direct_unit_fields
             auto_field_id = direct_unit_fields[0] if len(direct_unit_fields) == 1 else None
             status = "confirmed"
             method = "mapped_soi_unit_identity"
             confidence = 0.99
+            if auto_field_id is not None:
+                matches[unit_key] = auto_field_id
+        elif (
+            location_group_fields
+            and aph_acres_value > 0
+            and location_group_variance_pct is not None
+            and (
+                abs(location_group_acres - aph_acres_value) <= 2.0
+                or location_group_variance_pct <= 4.0
+            )
+        ):
+            confirmed_group_fields = location_group_fields
+            auto_field_id = location_group_fields[0] if len(location_group_fields) == 1 else None
+            status = "confirmed"
+            method = "mapped_soi_location_group"
+            confidence = 0.96 if location_group_variance_pct <= 2.0 else 0.92
             if auto_field_id is not None:
                 matches[unit_key] = auto_field_id
         # FSA identity remains a safe fallback when a carrier map does not
@@ -300,6 +382,12 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "unit_number": unit_number,
             "identity_key": unit_key,
             "mapped_soi_field_ids": direct_unit_fields,
+            "mapped_soi_location_field_ids": location_group_fields,
+            "mapped_soi_location_acres": location_group_acres or None,
+            "mapped_soi_location_variance_pct": round(location_group_variance_pct, 2) if location_group_variance_pct is not None else None,
+            "township_range": meta.get("township_range"),
+            "section": meta.get("section"),
+            "farm_name": meta.get("farm_name"),
             "candidates": candidates[:8],
         }
         conn.execute(
@@ -309,7 +397,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
             (farm_id, document_id, unit_key, auto_field_id, status, confidence, method, json_dumps(match_meta)),
         )
-        if direct_unit_fields:
+        if confirmed_group_fields:
             match_row = conn.execute(
                 "SELECT id FROM aph_unit_matches WHERE source_document_id=? AND unit_key=?",
                 (document_id, unit_key),
@@ -317,7 +405,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             if match_row:
                 match_id = int(match_row["id"])
                 conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
-                for fid in direct_unit_fields:
+                for fid in confirmed_group_fields:
                     conn.execute(
                         "INSERT INTO aph_unit_field_links(match_id,field_id) VALUES(?,?) ON CONFLICT(match_id,field_id) DO NOTHING",
                         (match_id, fid),

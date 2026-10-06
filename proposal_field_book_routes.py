@@ -107,6 +107,23 @@ def _build_field_book_data(token: str):
                     f"NOAA shows {el_pct}% El Nino odds for {planting.get('season') or 'spring'}, "
                     "but this field does not show a strong historical El Nino yield bias. ENSO remains a secondary factor."
                 )
+            hotdry = hist.get("hot_dry_sensitivity")
+            wxyears = int(hist.get("weather_year_count") or 0)
+            if hotdry is not None and wxyears >= 4:
+                if float(hotdry) >= 0.05:
+                    climate_decision += (
+                        f" Across {wxyears} weather-linked APH years, hotter/drier seasons averaged about "
+                        f"{round(float(hotdry)*100)}% below normal yield, increasing the value of stress, roots and moisture-use traits."
+                    )
+                elif float(hotdry) <= -0.05:
+                    climate_decision += (
+                        f" Across {wxyears} weather-linked APH years, hotter/drier seasons have not reduced yield, "
+                        "so climate risk does not justify giving up top-end yield potential."
+                    )
+                else:
+                    climate_decision += (
+                        f" Across {wxyears} weather-linked APH years, hot/dry conditions have not created a strong repeatable yield penalty."
+                    )
             if summer.get("neutral_pct") is not None and summer.get("el_nino_pct") is not None:
                 climate_decision += (
                     f" NOAA shifts to {summer.get('neutral_pct')}% Neutral / {summer.get('el_nino_pct')}% El Nino "

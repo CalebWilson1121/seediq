@@ -256,12 +256,30 @@ def _management_fit(
 def _production_context(field_id: int, crop: str) -> dict[str, Any]:
     crop = _normalize_crop(crop)
     with connect() as conn:
-        rows = rows_to_dicts(conn.execute(
+        direct = rows_to_dicts(conn.execute(
             "SELECT cr.crop_year,cr.yield_value,e.precipitation_in,e.heat_days_95,e.heat_days_90 "
-            "FROM crop_records cr LEFT JOIN field_year_environment e ON e.field_id=cr.field_id AND e.crop_year=cr.crop_year "
+            "FROM crop_records cr LEFT JOIN field_year_environment e ON e.field_id=? AND e.crop_year=cr.crop_year "
             "WHERE cr.field_id=? AND upper(cr.crop)=? AND cr.yield_value IS NOT NULL ORDER BY cr.crop_year",
+            (field_id, field_id, crop),
+        ).fetchall())
+        linked = rows_to_dicts(conn.execute(
+            "SELECT cr.crop_year,cr.yield_value,e.precipitation_in,e.heat_days_95,e.heat_days_90 "
+            "FROM aph_unit_field_links l "
+            "JOIN aph_unit_matches m ON m.id=l.match_id "
+            "JOIN crop_records cr ON cr.source_document_id=m.source_document_id "
+            "LEFT JOIN field_year_environment e ON e.field_id=l.field_id AND e.crop_year=cr.crop_year "
+            "WHERE l.field_id=? AND m.match_status='confirmed' AND upper(cr.crop)=? "
+            "AND cr.yield_value IS NOT NULL "
+            "AND COALESCE(cr.metadata_json->>'unit_number','')=m.unit_key "
+            "ORDER BY cr.crop_year",
             (field_id, crop),
         ).fetchall())
+        seen=set()
+        rows=[]
+        for r in direct+linked:
+            k=(r.get("crop_year"),r.get("yield_value"))
+            if k in seen: continue
+            seen.add(k); rows.append(r)
     yields = [float(r["yield_value"]) for r in rows if r.get("yield_value") is not None]
     if not yields:
         return {"year_count": 0, "average_yield": None, "stability_score": None, "hot_dry_sensitivity": None}

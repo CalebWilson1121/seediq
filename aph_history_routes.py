@@ -157,7 +157,7 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                 "reason": "Mapped SOI identity → exact SeedIQ field crosswalk"
                     + (f"; spatial overlap {float(soi.get('max_overlap_pct') or 0):.0f}%" if soi.get("max_overlap_pct") is not None else ""),
                 "source": "mapped_soi_crosswalk",
-                "reference_geojson": soi.get("reference_geojson"),
+                "has_reference_geometry": bool(soi.get("reference_geojson")),
                 "soi_status": soi.get("status"),
             })
 
@@ -542,12 +542,43 @@ def aph_matches(farm_id: int):
     field_acres = {int(f["id"]): float(f.get("acres") or 0) for f in fields}
     for m in matches:
         m["metadata"] = _loads(m.pop("metadata_json", None), {})
+        soi = m["metadata"].get("soi_crosswalk")
+        if isinstance(soi, dict) and soi.get("reference_geojson"):
+            soi = dict(soi)
+            soi["has_reference_geometry"] = True
+            soi.pop("reference_geojson", None)
+            m["metadata"]["soi_crosswalk"] = soi
         ids = link_map.get(int(m["id"]), [])
         if not ids and m.get("field_id"):
             ids = [int(m["field_id"])]
         m["field_ids"] = ids
         m["selected_acres"] = round(sum(field_acres.get(fid,0) for fid in ids),2)
     return {"farm_id": farm_id, "matches": matches, "fields": fields}
+
+
+@router.get("/api/aph-matches/{match_id}/review-reference")
+def aph_match_review_reference(match_id: int):
+    with connect() as conn:
+        match = conn.execute(
+            "SELECT id,farm_id,metadata_json FROM aph_unit_matches WHERE id=?",
+            (match_id,),
+        ).fetchone()
+    if not match:
+        raise HTTPException(status_code=404, detail="APH unit match not found")
+    metadata = _loads(match.get("metadata_json"), {})
+    soi = metadata.get("soi_crosswalk") if isinstance(metadata.get("soi_crosswalk"), dict) else {}
+    return {
+        "match_id": match_id,
+        "farm_id": int(match["farm_id"]),
+        "reference_geojson": soi.get("reference_geojson"),
+        "field_ids": [int(x) for x in (soi.get("field_ids") or [])],
+        "field_names": soi.get("field_names") or [],
+        "management_names": soi.get("management_names") or [],
+        "aph_acres": soi.get("aph_acres"),
+        "selected_acres": soi.get("selected_acres"),
+        "acre_variance_pct": soi.get("acre_variance_pct"),
+        "max_overlap_pct": soi.get("max_overlap_pct"),
+    }
 
 
 @router.put("/api/aph-matches/{match_id}/confirm")

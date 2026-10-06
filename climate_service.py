@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from aph_utils import is_valid_production_record, match_identity, record_identity
 from database import connect, json_dumps, rows_to_dicts
 
 OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
@@ -254,31 +255,34 @@ def _field_years(field_ids: list[int]) -> dict[int, set[int]]:
     ph = ",".join("?" for _ in field_ids)
     with connect() as conn:
         direct = rows_to_dicts(conn.execute(
-            f"SELECT field_id,crop_year FROM crop_records WHERE field_id IN ({ph}) AND crop_year IS NOT NULL",
+            f"SELECT field_id,crop_year,crop,practice,yield_value,metadata_json "
+            f"FROM crop_records WHERE field_id IN ({ph}) AND crop_year IS NOT NULL",
             tuple(field_ids),
         ).fetchall())
         linked = rows_to_dicts(conn.execute(
-            f"SELECT l.field_id,cr.crop_year,cr.metadata_json,m.unit_key "
+            f"SELECT l.field_id,cr.crop_year,cr.crop,cr.practice,cr.yield_value,cr.metadata_json,"
+            f"m.unit_key,m.metadata_json AS match_metadata_json "
             f"FROM aph_unit_field_links l JOIN aph_unit_matches m ON m.id=l.match_id "
             f"JOIN crop_records cr ON cr.source_document_id=m.source_document_id "
             f"WHERE l.field_id IN ({ph}) AND m.match_status='confirmed' AND cr.crop_year IS NOT NULL",
             tuple(field_ids),
         ).fetchall())
-    out: dict[int, set[int]] = defaultdict(set)
-    for r in direct:
-        out[int(r["field_id"])].add(int(r["crop_year"]))
-    import json
-    for r in linked:
-        meta = r.get("metadata_json")
-        if not isinstance(meta, dict):
-            try:
-                meta = json.loads(meta or "{}")
-            except Exception:
-                meta = {}
-        if str(meta.get("unit_number") or "") == str(r.get("unit_key") or ""):
-            out[int(r["field_id"])].add(int(r["crop_year"]))
-    return dict(out)
 
+    out: dict[int, set[int]] = defaultdict(set)
+    for row in direct:
+        if is_valid_production_record(row):
+            out[int(row["field_id"])].add(int(row["crop_year"]))
+
+    for row in linked:
+        if not is_valid_production_record(row):
+            continue
+        if record_identity(row) != match_identity({
+            "unit_key": row.get("unit_key"),
+            "metadata_json": row.get("match_metadata_json"),
+        }):
+            continue
+        out[int(row["field_id"])].add(int(row["crop_year"]))
+    return dict(out)
 
 def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
     field_ids = sorted({int(x) for x in field_ids if int(x) > 0})

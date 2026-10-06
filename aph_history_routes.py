@@ -610,19 +610,37 @@ def farm_production_profile(farm_id: int):
                 "source_record_count": int(r.get("_source_record_count") or 1),
                 "environment": env_by_key.get((fid, int(r["crop_year"]))) if r.get("crop_year") is not None else None,
             })
-        avg_yield = round(mean(yield_vals), 1) if yield_vals else None
-        if len(yield_vals) >= 2 and avg_yield:
-            spread = mean(abs(x - avg_yield) for x in yield_vals)
-            stability = round(max(0.0, min(100.0, 100.0 - (spread / avg_yield * 180.0))), 0)
-        else:
-            stability = None
+        by_crop: dict[str, dict[str, Any]] = {}
+        crop_groups: dict[str, list[float]] = {}
+        for row in field_records:
+            crop_name = str(row.get("crop") or "UNKNOWN").upper()
+            if row.get("yield_value") is not None:
+                crop_groups.setdefault(crop_name, []).append(float(row["yield_value"]))
+        for crop_name, crop_yields in crop_groups.items():
+            crop_avg = round(mean(crop_yields), 1) if crop_yields else None
+            if len(crop_yields) >= 2 and crop_avg:
+                crop_spread = mean(abs(x - crop_avg) for x in crop_yields)
+                crop_stability = round(max(0.0, min(100.0, 100.0 - (crop_spread / crop_avg * 180.0))), 0)
+            else:
+                crop_stability = None
+            by_crop[crop_name] = {
+                "year_count": len(crop_yields),
+                "average_yield": crop_avg,
+                "yield_stability_score": crop_stability,
+            }
+
+        # A bushel average across corn and soybeans is not agronomically valid.
+        # Preserve a simple top-level summary only when the field has one crop in
+        # its usable history; otherwise consumers must use by_crop.
+        single_crop = next(iter(by_crop.values())) if len(by_crop) == 1 else None
         out_fields.append({
             **f,
             "drainage": _loads(f.get("drainage_summary_json"), {}),
             "production_summary": {
                 "year_count": len(years),
-                "average_yield": avg_yield,
-                "yield_stability_score": stability,
+                "average_yield": single_crop.get("average_yield") if single_crop else None,
+                "yield_stability_score": single_crop.get("yield_stability_score") if single_crop else None,
+                "by_crop": by_crop,
                 "ignored_or_collapsed_source_rows": max(0, len(raw_field_records) - len(field_records)),
             },
             "years": years,

@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import connect, json_dumps, rows_to_dicts
+from climate_service import enrich_climate_for_fields, enrich_climate_for_farm
 
 router = APIRouter()
 
@@ -457,14 +458,14 @@ def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
                 conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
                 updated += 1
 
-    weather = [_enrich_weather_for_field(fid) for fid in field_ids]
+    climate = enrich_climate_for_fields(field_ids)
     return {
         "match_id": match_id,
         "field_ids": field_ids,
         "fields": fields,
         "selected_acres": round(sum(float(f.get("acres") or 0) for f in fields),2),
         "crop_records_linked": updated,
-        "weather": weather,
+        "climate": climate,
     }
 
 
@@ -474,23 +475,18 @@ def enrich_field_history_weather(field_id: int):
         field = conn.execute("SELECT id FROM fields WHERE id=?", (field_id,)).fetchone()
     if not field:
         raise HTTPException(status_code=404, detail="Field not found")
-    return _enrich_weather_for_field(field_id)
+    return enrich_climate_for_fields([field_id])
 
 
 @router.post("/api/farms/{farm_id}/history/weather")
 def enrich_farm_history_weather(farm_id: int):
-    with connect() as conn:
-        field_ids = [
-            int(r["field_id"])
-            for r in conn.execute(
-                "SELECT DISTINCT field_id FROM crop_records WHERE farm_id=? AND field_id IS NOT NULL ORDER BY field_id",
-                (farm_id,),
-            ).fetchall()
-        ]
-    results = []
-    for field_id in field_ids:
-        results.append(_enrich_weather_for_field(field_id))
-    return {"farm_id": farm_id, "field_count": len(field_ids), "results": results}
+    # Backward-compatible route; now enriches rainfall + heat + NOAA ENSO.
+    return enrich_climate_for_farm(farm_id)
+
+
+@router.post("/api/farms/{farm_id}/history/climate")
+def enrich_farm_history_climate(farm_id: int):
+    return enrich_climate_for_farm(farm_id)
 
 
 @router.get("/api/farms/{farm_id}/production-profile")
@@ -537,7 +533,11 @@ def farm_production_profile(farm_id: int):
                 rec_by_field.setdefault(fid, []).append(r)
         elif r.get("field_id") is not None:
             rec_by_field.setdefault(int(r["field_id"]), []).append(r)
-    env_by_key = {(int(e["field_id"]), int(e["crop_year"])): e for e in env}
+    env_by_key = {}
+    for e in env:
+        e = dict(e)
+        e["metadata"] = _loads(e.pop("metadata_json", None), {})
+        env_by_key[(int(e["field_id"]), int(e["crop_year"]))] = e
 
     out_fields = []
     for f in fields:
@@ -584,5 +584,5 @@ def farm_production_profile(farm_id: int):
         },
         "fields": out_fields,
         "weather_source": "Open-Meteo ERA5-Land historical reanalysis, Apr 1–Oct 15",
-        "enso_status": "schema ready; NOAA ONI enrichment is the next climate layer",
+        "enso_source": "NOAA CPC RONI (primary) + ONI; SeedIQ crop-season phase uses mean MJJ/JJA/JAS",
     }

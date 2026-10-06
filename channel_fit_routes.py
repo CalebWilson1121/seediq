@@ -539,6 +539,14 @@ def _whole_farm_reason_summary(row: dict[str, Any], rec: dict[str, Any], context
         if x and not str(x).lower().startswith("local maturity")
     ][:3]
 
+    el_profile = (context.get("enso_yield_profile") or {}).get("El Nino") or {}
+    avg_yield = context.get("average_yield")
+    el_years = int(el_profile.get("years") or 0)
+    el_avg = el_profile.get("average_yield")
+    el_delta_pct = None
+    if el_years >= 2 and el_avg is not None and avg_yield:
+        el_delta_pct = round((float(el_avg) - float(avg_yield)) / float(avg_yield) * 100.0, 1)
+
     return {
         "fit_score": rec.get("fit_score"),
         "field_signals": reasons[:5],
@@ -546,6 +554,11 @@ def _whole_farm_reason_summary(row: dict[str, Any], rec: dict[str, Any], context
         "aph_points": rec.get("aph_points"),
         "management_points": rec.get("management_points"),
         "bayer_trait_points": rec.get("bayer_trait_points"),
+        "climate_history": {
+            "el_nino_years": el_years,
+            "el_nino_average_yield": el_avg,
+            "el_nino_vs_overall_pct": el_delta_pct,
+        },
         "aph_context": {
             "year_count": years,
             "average_yield": avg,
@@ -583,6 +596,7 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
         if pcrop in products_by_crop:
             products_by_crop[pcrop].append(p)
 
+    outlook = current_enso_outlook(crop_year)
     insights = []
     for row in rows:
         crop = _normalize_crop(row.get("crop") or row.get("field_crop"))
@@ -596,15 +610,47 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
         if not selected:
             continue
         rank = next((i + 1 for i, x in enumerate([z for z in ranked if z.get("location_eligible")]) if int(x.get("seed_product_id") or 0) == selected_id), None)
+        summary = _whole_farm_reason_summary(row, selected, context)
+        hist = summary.get("climate_history") or {}
+        planting = outlook.get("planting") or {}
+        summer = outlook.get("early_summer") or {}
+        climate_decision = None
+        el_pct = planting.get("el_nino_pct")
+        delta = hist.get("el_nino_vs_overall_pct")
+        if el_pct is not None:
+            if delta is not None and delta <= -5:
+                climate_decision = (
+                    f"NOAA shows {el_pct}% El Nino odds for {planting.get('season') or 'spring'}; "
+                    f"this field has averaged {abs(delta):.0f}% below its overall yield in El Nino years. "
+                    "Keep stress stability, roots and moisture-use efficiency in the seed decision."
+                )
+            elif delta is not None and delta >= 5:
+                climate_decision = (
+                    f"NOAA shows {el_pct}% El Nino odds for {planting.get('season') or 'spring'}; "
+                    f"this field has averaged {delta:.0f}% above its overall yield in El Nino years. "
+                    "Climate history supports maintaining top-end yield potential rather than over-defending."
+                )
+            else:
+                climate_decision = (
+                    f"NOAA shows {el_pct}% El Nino odds for {planting.get('season') or 'spring'}. "
+                    "This field does not show a strong historical El Nino yield bias, so ENSO is a secondary tiebreaker."
+                )
+            if summer.get("neutral_pct") is not None and summer.get("el_nino_pct") is not None:
+                climate_decision += (
+                    f" By {summer.get('season') or 'early summer'}, NOAA shifts to "
+                    f"{summer.get('neutral_pct')}% Neutral / {summer.get('el_nino_pct')}% El Nino, "
+                    "so SeedIQ does not treat the winter signal as a summer guarantee."
+                )
+        summary["climate_decision"] = climate_decision
         insights.append({
             "field_id": int(row["field_id"]),
             "field_name": row.get("name"),
             "selected_seed_product_id": selected_id,
             "selected_product_name": selected.get("product_name"),
             "rank": rank,
-            **_whole_farm_reason_summary(row, selected, context),
+            **summary,
         })
-    return {"farm_id": farm_id, "crop_year": crop_year, "insights": insights}
+    return {"farm_id": farm_id, "crop_year": crop_year, "climate_outlook": outlook, "insights": insights}
 
 
 @router.get("/api/fields/{field_id}/channel-fit")

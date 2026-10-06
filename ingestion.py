@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import httpx
 
+from aph_utils import aph_identity, practice_bucket
 from database import backend_name, connect, json_dumps
 from models import ParsedDocument
 from parsers import PARSER_VERSION, parse_document
@@ -130,7 +131,8 @@ def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocumen
         metadata.update({
             "has_mapped_soi": True,
             "mapped_soi_field_count": len(parsed.fields),
-            "mapped_soi_geometry_count": sum(1 for f in parsed.fields if (f.metadata or {}).get("boundary_geojson")),
+            "mapped_soi_reference_geometry_count": sum(1 for f in parsed.fields if (f.metadata or {}).get("reference_boundary_geojson")),
+            "mapped_soi_geometry_policy": "reference_only",
             "insurance_data_scrubbed": True,
         })
         source = "mapped_soi_upload"
@@ -156,11 +158,10 @@ def _prepare_reprocess(existing) -> None:
     farm_id = int(existing["farm_id"])
     doc_type = str(existing.get("document_type") or "").upper()
     with connect() as conn:
-        # APH is enrichment only. Reprocessing APH must never touch the mapped
-        # parent geometry or soils. Map-source documents may rebuild geometry.
-        if doc_type in {"MBAR", "SOI"}:
-            conn.execute("DELETE FROM field_soils WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
-            conn.execute("DELETE FROM field_locations WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
+        # Reprocessing a source document must never globally wipe field geometry
+        # or soils. Exact MBAR/manual boundaries are permanent field assets, and
+        # mapped-SOI raster shapes are only references. Touched MBAR fields are
+        # updated individually later in ingestion.
         if doc_type == "APH":
             conn.execute("DELETE FROM aph_unit_matches WHERE source_document_id=?", (document_id,))
         conn.execute("DELETE FROM source_facts WHERE document_id=?", (document_id,))
@@ -170,12 +171,7 @@ def _prepare_reprocess(existing) -> None:
 
 
 def _norm_practice(value: Any) -> str:
-    s = str(value or "").upper().replace("-", "").replace(" ", "")
-    if "NIRR" in s or "NONIRR" in s:
-        return "NIRR"
-    if "IRR" in s:
-        return "IRR"
-    return s
+    return practice_bucket(value)
 
 
 def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -237,7 +233,8 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
     units = 0
     for pf in parsed.fields:
         meta = pf.metadata or {}
-        unit_key = str(meta.get("unit") or pf.field_number or pf.name or f"unit-{units+1}")
+        unit_number = str(meta.get("unit") or pf.field_number or pf.name or f"unit-{units+1}")
+        unit_key = aph_identity(pf.crop, pf.practice or pf.irrigation, unit_number)
         candidates = _aph_match_candidates(pf, mapped_fields)
         top = candidates[0] if candidates else None
         auto_field_id = None
@@ -258,7 +255,8 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "fsa_farm_number": meta.get("fsa_farm_number"),
             "fsa_tract_number": meta.get("fsa_tract_number"),
             "fsa_field_number": meta.get("fsa_field_number"),
-            "unit_number": meta.get("unit") or pf.field_number,
+            "unit_number": unit_number,
+            "identity_key": unit_key,
             "candidates": candidates[:8],
         }
         conn.execute(
@@ -337,7 +335,11 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 field_id_by_key[local_key] = field_id
                 if f.field_number:
                     field_id_by_key[str(f.field_number)] = field_id
-                if parsed.document_type in {"MBAR", "SOI"} and (f.metadata or {}).get("boundary_geojson"):
+                # Only exact MBAR/GIS geometry becomes an authoritative field
+                # boundary automatically. Mapped-SOI raster geometry is retained
+                # in metadata as a reference locator and must be confirmed or
+                # replaced before SSURGO/seed placement uses it.
+                if parsed.document_type == "MBAR" and (f.metadata or {}).get("boundary_geojson"):
                     field_boundaries.append((field_id, f.metadata["boundary_geojson"]))
 
         for r in parsed.crop_records:
@@ -360,7 +362,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 (round(mapped_acres, 2), prospect_id),
             )
 
-    if parsed.document_type in {"MBAR", "SOI"} and field_boundaries:
+    if parsed.document_type == "MBAR" and field_boundaries:
         from soil_service import set_exact_boundary
         for field_id, boundary in field_boundaries:
             try:

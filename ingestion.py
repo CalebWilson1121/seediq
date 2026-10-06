@@ -196,9 +196,19 @@ def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> 
                 exact_ids += 1
                 score += 0.22
                 reasons.append(f"FSA {label} match")
+        mapped_meta = {}
+        try:
+            import json
+            mapped_meta = mf.get("metadata_json") if isinstance(mf.get("metadata_json"), dict) else json.loads(mf.get("metadata_json") or "{}")
+        except Exception:
+            mapped_meta = {}
+        # APH matching should use the acreage reported by the source map when
+        # available. Exact polygon acreage is a planning/geography measurement
+        # and can legitimately differ after roads, waterways or pivots are cut.
+        identity_acres = float(mapped_meta.get("reported_acres") or mf.get("acres") or 0)
         mapped_acres = float(mf.get("acres") or 0)
-        if aph_acres and mapped_acres:
-            pct = abs(mapped_acres - aph_acres) / max(aph_acres, 1)
+        if aph_acres and identity_acres:
+            pct = abs(identity_acres - aph_acres) / max(aph_acres, 1)
             if pct <= 0.01:
                 score += 0.28; reasons.append("acreage within 1%")
             elif pct <= 0.03:
@@ -217,14 +227,15 @@ def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> 
             "exact_fsa_parts": exact_ids,
             "reasons": reasons,
             "mapped_acres": mapped_acres,
+            "identity_acres": identity_acres,
             "aph_acres": aph_acres,
         })
-    return sorted(out, key=lambda x: (-x["score"], abs(x["mapped_acres"] - x["aph_acres"])))
+    return sorted(out, key=lambda x: (-x["score"], abs(x["identity_acres"] - x["aph_acres"])))
 
 
 def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> tuple[dict[str, int], int]:
     mapped_fields = [dict(r) for r in conn.execute(
-        "SELECT id,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation FROM fields WHERE farm_id=? ORDER BY name",
+        "SELECT id,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation,metadata_json FROM fields WHERE farm_id=? ORDER BY name",
         (farm_id,),
     ).fetchall()]
     if not mapped_fields:
@@ -325,10 +336,28 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 key_parts = [str(x or "") for x in [f.farm_number, f.tract_number, f.field_number]]
                 local_key = "|".join(x for x in key_parts if x) or f.name or f"field-{i+1}"
                 field_key = f"{farm_id}:{local_key}"
+                source_meta = dict(f.metadata or {})
+                if f.acres is not None:
+                    source_meta["reported_acres"] = float(f.acres)
+                    source_meta["reported_acres_source"] = parsed.document_type
+                existing_field = conn.execute(
+                    "SELECT metadata_json FROM fields WHERE field_key=?",
+                    (field_key,),
+                ).fetchone()
+                existing_meta = {}
+                if existing_field:
+                    try:
+                        import json
+                        existing_meta = existing_field.get("metadata_json") if isinstance(existing_field.get("metadata_json"), dict) else json.loads(existing_field.get("metadata_json") or "{}")
+                    except Exception:
+                        existing_meta = {}
+                # Preserve permanent/manual geometry metadata while refreshing
+                # map-source identity metadata.
+                merged_meta = {**existing_meta, **source_meta}
                 conn.execute(
                     "INSERT INTO fields(farm_id,field_key,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(field_key) DO UPDATE SET name=excluded.name,acres=COALESCE(excluded.acres,fields.acres),county=COALESCE(excluded.county,fields.county),state=COALESCE(excluded.state,fields.state),farm_number=COALESCE(excluded.farm_number,fields.farm_number),tract_number=COALESCE(excluded.tract_number,fields.tract_number),field_number=COALESCE(excluded.field_number,fields.field_number),crop=CASE WHEN excluded.crop IS NULL THEN fields.crop ELSE excluded.crop END,practice=COALESCE(excluded.practice,fields.practice),irrigation=COALESCE(excluded.irrigation,fields.irrigation),metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
-                    (farm_id, field_key, f.name, f.acres, f.county, f.state, f.farm_number, f.tract_number, f.field_number, f.crop, f.practice, f.irrigation, json_dumps(f.metadata)),
+                    (farm_id, field_key, f.name, f.acres, f.county, f.state, f.farm_number, f.tract_number, f.field_number, f.crop, f.practice, f.irrigation, json_dumps(merged_meta)),
                 )
                 field_row = conn.execute("SELECT id FROM fields WHERE field_key=?", (field_key,)).fetchone()
                 field_id = int(field_row["id"])

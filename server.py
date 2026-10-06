@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from ai_service import run_ai_task
@@ -20,7 +20,7 @@ from crop_plan_service import list_field_plans, rotate_farm, rotate_field, selec
 from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
 from ingestion import ingest_file
 from seed_engine import rank_seeds
-from soil_service import enrich_field, enrich_prospect, prospect_soil_status, set_exact_boundary
+from soil_service import enrich_field, enrich_prospect, prospect_soil_status
 
 BASE = Path(__file__).parent
 SESSION_COOKIE = "seediq_session"
@@ -47,10 +47,6 @@ class AITaskRequest(BaseModel):
 class SeedRankRequest(BaseModel):
     field_profile: dict[str, float]
     seeds: list[dict]
-
-class BoundaryRequest(BaseModel):
-    boundary_geojson: dict
-    enrich_soils: bool = True
 
 class CropRequest(BaseModel):
     crop_year: int
@@ -100,6 +96,47 @@ def _require(request: Request, *roles: str):
         return require_role(_user(request), *roles)
     except PermissionError as exc:
         raise HTTPException(status_code=401 if str(exc) == "Login required" else 403, detail=str(exc)) from exc
+
+# Demo/production safety boundary. SeedIQ's app data is server-rendered through
+# FastAPI/Postgres, so protect the application surface even where an individual
+# legacy route has not yet added a role decorator. Farmer proposal share links
+# remain intentionally public.
+_PUBLIC_EXACT_PATHS = {
+    "/login.html",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/health",
+    "/farmer-proposal",
+    "/farmer-proposal.html",
+    "/api/farmer-proposal-page",
+    "/styles.css",
+    "/app.js",
+    "/favicon.ico",
+}
+_PUBLIC_PREFIXES = (
+    "/api/public/proposals/",
+)
+
+
+@app.middleware("http")
+async def require_app_session(request: Request, call_next):
+    path = request.url.path
+    if path in _PUBLIC_EXACT_PATHS or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    user = _user(request)
+    if user:
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Login required"})
+
+    target = "/login.html"
+    if request.url.query:
+        # Keep redirects simple and non-sensitive; the login page can return the
+        # user to the app home after authentication.
+        target += "?next=app"
+    return RedirectResponse(url=target, status_code=303)
 
 @app.get("/api/health")
 def health():
@@ -441,15 +478,6 @@ def enrich_prospect_soils(prospect_id: int, force: bool = False):
 def enrich_one_field(field_id: int, force: bool = False):
     try: return enrich_field(field_id, force=force)
     except Exception as exc: raise HTTPException(status_code=400, detail=f"Field soil enrichment failed: {str(exc)[:220]}") from exc
-
-@app.put("/api/fields/{field_id}/boundary")
-def update_field_boundary(field_id: int, req: BoundaryRequest):
-    try:
-        location = set_exact_boundary(field_id, req.boundary_geojson)
-        result = {"field_id": field_id, "location": location}
-        if req.enrich_soils: result["soil"] = enrich_field(field_id, force=True)
-        return result
-    except Exception as exc: raise HTTPException(status_code=400, detail=f"Boundary could not be saved: {str(exc)[:220]}") from exc
 
 @app.post("/api/farms/{farm_id}/ai")
 def ai_task(farm_id: int, req: AITaskRequest):

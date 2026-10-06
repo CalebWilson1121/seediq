@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from aph_utils import collapse_production_records, match_identity, normalize_crop, practice_bucket, record_identity
 from database import connect, json_dumps, rows_to_dicts
 from climate_service import enrich_climate_for_fields, enrich_climate_for_farm
 
@@ -34,12 +35,7 @@ def _loads(value: Any, default):
 
 
 def _practice_bucket(value: Any) -> str:
-    s = str(value or "").upper().replace("-", "").replace(" ", "")
-    if "NIRR" in s or "NONIRR" in s:
-        return "NIRR"
-    if "IRR" in s:
-        return "IRR"
-    return s or "UNKNOWN"
+    return practice_bucket(value)
 
 
 def _field_root(name: Any) -> str:
@@ -50,6 +46,33 @@ def _field_root(name: Any) -> str:
     s = re.sub(r"\b\d+\b", " ", s)
     s = re.sub(r"[^a-z]+", " ", s)
     return re.sub(r"\s+", " ", s).strip() or str(name or "").strip().lower()
+
+
+def _name_tokens(value: Any) -> set[str]:
+    s = _field_root(value)
+    stop = {"farm", "farms", "place", "field", "the"}
+    return {x for x in s.split() if x and x not in stop}
+
+
+def _name_similarity(a: Any, b: Any) -> float:
+    aa, bb = _name_tokens(a), _name_tokens(b)
+    if not aa or not bb:
+        return 0.0
+    if aa == bb:
+        return 1.0
+    if aa <= bb or bb <= aa:
+        return 0.9
+    return len(aa & bb) / len(aa | bb)
+
+
+def _field_aliases(field: dict[str, Any]) -> list[str]:
+    md = _loads(field.get("metadata_json"), {})
+    aliases = md.get("aph_identity_aliases") or []
+    if not isinstance(aliases, list):
+        aliases = []
+    values = [str(field.get("name") or "").strip()]
+    values.extend(str(x).strip() for x in aliases if str(x).strip())
+    return list(dict.fromkeys(x for x in values if x))
 
 
 
@@ -70,12 +93,17 @@ def _group_candidates(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for (practice, root), members in grouped.items():
         members = sorted(members, key=lambda x: str(x.get("name") or ""))
         total = round(sum(float(x.get("acres") or 0) for x in members), 2)
+        aliases = []
+        for member in members:
+            aliases.extend(_field_aliases(member))
+        aliases = list(dict.fromkeys(x for x in aliases if x))
         out.append({
             "practice": practice,
             "root": root,
             "field_ids": [int(x["id"]) for x in members],
             "field_names": [x.get("name") for x in members],
             "selected_acres": total,
+            "identity_aliases": aliases,
         })
     return out
 
@@ -87,7 +115,7 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
             (farm_id,),
         ).fetchall())
         fields = rows_to_dicts(conn.execute(
-            "SELECT id,name,acres,irrigation,practice,farm_number,tract_number,field_number "
+            "SELECT id,name,acres,irrigation,practice,farm_number,tract_number,field_number,metadata_json "
             "FROM fields WHERE farm_id=? ORDER BY name",
             (farm_id,),
         ).fetchall())
@@ -120,23 +148,36 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                 if abs_diff > max(12.0, target * 0.08):
                     continue
 
-                # Acreage is intentionally dominant.
+                aph_name = md.get("farm_name") or md.get("management_name") or ""
+                name_similarity = max(
+                    [_name_similarity(aph_name, alias) for alias in (g.get("identity_aliases") or [])] or [0.0]
+                )
+
+                # Acreage tells us whether a group is plausible; management
+                # identity tells us whether it is the right group. Exact acreage
+                # alone must never silently beat a differently named field.
                 if abs_diff <= 0.25:
-                    score = 100.0
+                    acreage_score = 100.0
                 elif abs_diff <= 0.75:
-                    score = 98.0
+                    acreage_score = 98.0
                 elif abs_diff <= 1.50:
-                    score = 95.0
+                    acreage_score = 95.0
                 elif pct <= 1.0:
-                    score = 93.0
+                    acreage_score = 93.0
                 elif pct <= 2.0:
-                    score = 88.0
+                    acreage_score = 88.0
                 elif pct <= 3.5:
-                    score = 80.0
+                    acreage_score = 80.0
                 elif pct <= 5.0:
-                    score = 70.0
+                    acreage_score = 70.0
                 else:
-                    score = 55.0
+                    acreage_score = 55.0
+
+                generic_aph_name = _field_root(aph_name) in {"", "other ident", "other", "unknown", "nau unit"}
+                if generic_aph_name:
+                    score = acreage_score * 0.55
+                else:
+                    score = (name_similarity * 70.0) + (acreage_score * 0.30)
 
                 candidates.append({
                     "field_ids": g["field_ids"],
@@ -147,9 +188,16 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                     "variance_acres": diff,
                     "variance_pct": round(pct, 2),
                     "score": score,
+                    "acreage_score": acreage_score,
+                    "name_similarity": round(name_similarity, 3),
+                    "aph_management_name": aph_name or None,
+                    "identity_aliases": g.get("identity_aliases") or [],
                     "crop": crop,
                     "practice": practice,
-                    "reason": f"{g['root'] or 'field group'} totals {total:.2f} ac vs APH {target:.2f} ac",
+                    "reason": (
+                        f"{g['root'] or 'field group'} totals {total:.2f} ac vs APH {target:.2f} ac"
+                        + (f"; management-name match {round(name_similarity * 100)}%" if name_similarity > 0 else "")
+                    ),
                 })
 
         candidates.sort(key=lambda x: (-x["score"], abs(x["variance_acres"]), len(x["field_ids"]), x["field_root"]))
@@ -196,11 +244,18 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
         if chosen:
             abs_diff = abs(float(chosen["variance_acres"]))
             pct = float(chosen["variance_pct"])
-            # High confidence is intentionally strict: exact/near-exact acreage.
-            if abs_diff <= 1.0 or pct <= 0.75:
+            name_similarity = float(chosen.get("name_similarity") or 0)
+            aph_name = str(chosen.get("aph_management_name") or "")
+            generic_aph_name = _field_root(aph_name) in {"", "other ident", "other", "unknown", "nau unit"}
+            # Safety rule: acreage-only matches are suggestions, never automatic
+            # confirmations. High/medium requires corroborating management name
+            # (including an alias learned from a prior dealer confirmation).
+            if name_similarity >= 0.90 and (abs_diff <= 10.0 or pct <= 12.0):
                 confidence = "high"
-            elif abs_diff <= 3.0 or pct <= 2.0:
+            elif name_similarity >= 0.60 and (abs_diff <= 8.0 or pct <= 8.0):
                 confidence = "medium"
+            elif generic_aph_name and (abs_diff <= 1.0 or pct <= 0.75):
+                confidence = "review"
             else:
                 confidence = "review"
         result.append({
@@ -228,6 +283,38 @@ def _unit_from_record(record: dict[str, Any]) -> str | None:
     meta = _loads(record.get("metadata_json"), {})
     unit = meta.get("unit_number")
     return str(unit) if unit not in (None, "") else None
+
+
+def _conflicting_assignments(conn, match: dict[str, Any], field_ids: list[int]) -> list[dict[str, Any]]:
+    """Find same-document/same-crop/same-practice APH assignments for fields.
+
+    One mapped management field may participate in only one confirmed APH unit
+    for a crop/practice within a source document unless we add an explicit,
+    reviewed aggregation workflow later.
+    """
+    if not field_ids:
+        return []
+    metadata = _loads(match.get("metadata_json"), {})
+    target_crop = normalize_crop(metadata.get("crop"))
+    target_practice = _practice_bucket(metadata.get("practice"))
+    placeholders = ",".join("?" for _ in field_ids)
+    rows = rows_to_dicts(conn.execute(
+        f"SELECT l.field_id,m.id AS match_id,m.unit_key,m.metadata_json "
+        f"FROM aph_unit_field_links l JOIN aph_unit_matches m ON m.id=l.match_id "
+        f"WHERE m.source_document_id=? AND m.id<>? AND m.match_status='confirmed' "
+        f"AND l.field_id IN ({placeholders})",
+        (match["source_document_id"], match["id"], *field_ids),
+    ).fetchall())
+    conflicts = []
+    for row in rows:
+        md = _loads(row.get("metadata_json"), {})
+        if normalize_crop(md.get("crop")) == target_crop and _practice_bucket(md.get("practice")) == target_practice:
+            conflicts.append({
+                "field_id": int(row["field_id"]),
+                "match_id": int(row["match_id"]),
+                "unit_key": row.get("unit_key"),
+            })
+    return conflicts
 
 
 def _weather_for_field_year(field_id: int, crop_year: int) -> dict[str, Any]:
@@ -349,6 +436,15 @@ def aph_auto_confirm(farm_id: int, req: AutoConfirmRequest):
             match = conn.execute("SELECT * FROM aph_unit_matches WHERE id=? AND farm_id=?", (match_id, farm_id)).fetchone()
             if not match:
                 continue
+            conflicts = _conflicting_assignments(conn, dict(match), field_ids)
+            if conflicts:
+                skipped.append({
+                    "match_id": match_id,
+                    "confidence": item["confidence"],
+                    "reason": "mapped field already belongs to another APH unit for this crop/practice",
+                    "conflicts": conflicts,
+                })
+                continue
             conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
             for fid in field_ids:
                 conn.execute(
@@ -361,11 +457,12 @@ def aph_auto_confirm(farm_id: int, req: AutoConfirmRequest):
                 (primary, float(suggestion["score"]) / 100.0, match_id),
             )
             recs = rows_to_dicts(conn.execute(
-                "SELECT id,metadata_json FROM crop_records WHERE source_document_id=?",
+                "SELECT id,crop,practice,metadata_json FROM crop_records WHERE source_document_id=?",
                 (match["source_document_id"],),
             ).fetchall())
+            target_identity = match_identity(dict(match))
             for rec in recs:
-                if _unit_from_record(rec) == str(match["unit_key"]):
+                if record_identity(rec) == target_identity:
                     conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
         accepted.append({
             "match_id": match_id,
@@ -434,6 +531,16 @@ def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
         if len(fields) != len(field_ids) or any(int(f["farm_id"]) != int(match["farm_id"]) for f in fields):
             raise HTTPException(status_code=400, detail="Every selected field must belong to this farm")
 
+        conflicts = _conflicting_assignments(conn, dict(match), field_ids)
+        if conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "A selected field is already matched to another APH unit for this crop/practice.",
+                    "conflicts": conflicts,
+                },
+            )
+
         conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
         for fid in field_ids:
             conn.execute(
@@ -449,14 +556,38 @@ def confirm_aph_match(match_id: int, req: ConfirmAPHMatchRequest):
         # Keep crop_records unassigned for multi-field units. History is linked
         # through aph_unit_field_links to avoid duplicating farm production rows.
         records = rows_to_dicts(conn.execute(
-            "SELECT id,metadata_json FROM crop_records WHERE source_document_id=?",
+            "SELECT id,crop,practice,metadata_json FROM crop_records WHERE source_document_id=?",
             (match["source_document_id"],),
         ).fetchall())
         updated = 0
+        target_identity = match_identity(dict(match))
         for rec in records:
-            if _unit_from_record(rec) == str(match["unit_key"]):
+            if record_identity(rec) == target_identity:
                 conn.execute("UPDATE crop_records SET field_id=? WHERE id=?", (primary, rec["id"]))
                 updated += 1
+
+        # Remember a dealer-confirmed management identity on the exact fields.
+        # This is intentionally field metadata rather than document-specific
+        # matching, so future APH uploads can reuse the relationship.
+        match_meta = _loads(match.get("metadata_json"), {})
+        identity_alias = str(
+            match_meta.get("farm_name") or match_meta.get("management_name") or ""
+        ).strip()
+        if identity_alias:
+            for fid in field_ids:
+                row = conn.execute("SELECT metadata_json FROM fields WHERE id=?", (fid,)).fetchone()
+                field_meta = _loads(row.get("metadata_json") if row else None, {})
+                aliases = field_meta.get("aph_identity_aliases") or []
+                if not isinstance(aliases, list):
+                    aliases = []
+                normalized = {str(x).strip().lower() for x in aliases if str(x).strip()}
+                if identity_alias.lower() not in normalized:
+                    aliases.append(identity_alias)
+                field_meta["aph_identity_aliases"] = aliases[-20:]
+                conn.execute(
+                    "UPDATE fields SET metadata_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (json_dumps(field_meta), fid),
+                )
 
     climate = enrich_climate_for_fields(field_ids)
     return {
@@ -506,7 +637,7 @@ def farm_production_profile(farm_id: int):
             (farm_id,),
         ).fetchall())
         aph_links = rows_to_dicts(conn.execute(
-            "SELECT l.field_id,m.source_document_id,m.unit_key "
+            "SELECT l.field_id,m.source_document_id,m.unit_key,m.metadata_json "
             "FROM aph_unit_field_links l JOIN aph_unit_matches m ON m.id=l.match_id "
             "WHERE m.farm_id=? AND m.match_status='confirmed'",
             (farm_id,),
@@ -525,9 +656,9 @@ def farm_production_profile(farm_id: int):
     rec_by_field: dict[int, list[dict[str, Any]]] = {}
     linked_keys: dict[tuple[int,str], list[int]] = {}
     for l in aph_links:
-        linked_keys.setdefault((int(l["source_document_id"]), str(l["unit_key"])), []).append(int(l["field_id"]))
+        linked_keys.setdefault((int(l["source_document_id"]), match_identity(l)), []).append(int(l["field_id"]))
     for r in records:
-        linked = linked_keys.get((int(r["source_document_id"]), str(_unit_from_record(r) or "")), [])
+        linked = linked_keys.get((int(r["source_document_id"]), record_identity(r)), [])
         if linked:
             for fid in linked:
                 rec_by_field.setdefault(fid, []).append(r)
@@ -542,7 +673,8 @@ def farm_production_profile(farm_id: int):
     out_fields = []
     for f in fields:
         fid = int(f["id"])
-        field_records = rec_by_field.get(fid, [])
+        raw_field_records = rec_by_field.get(fid, [])
+        field_records = collapse_production_records(raw_field_records)
         years = []
         yield_vals = []
         for r in field_records:
@@ -557,21 +689,41 @@ def farm_production_profile(farm_id: int):
                 "production": r.get("production"),
                 "yield_value": yv,
                 "approved_yield": r.get("approved_yield"),
+                "source_record_count": int(r.get("_source_record_count") or 1),
                 "environment": env_by_key.get((fid, int(r["crop_year"]))) if r.get("crop_year") is not None else None,
             })
-        avg_yield = round(mean(yield_vals), 1) if yield_vals else None
-        if len(yield_vals) >= 2 and avg_yield:
-            spread = mean(abs(x - avg_yield) for x in yield_vals)
-            stability = round(max(0.0, min(100.0, 100.0 - (spread / avg_yield * 180.0))), 0)
-        else:
-            stability = None
+        by_crop: dict[str, dict[str, Any]] = {}
+        crop_groups: dict[str, list[float]] = {}
+        for row in field_records:
+            crop_name = str(row.get("crop") or "UNKNOWN").upper()
+            if row.get("yield_value") is not None:
+                crop_groups.setdefault(crop_name, []).append(float(row["yield_value"]))
+        for crop_name, crop_yields in crop_groups.items():
+            crop_avg = round(mean(crop_yields), 1) if crop_yields else None
+            if len(crop_yields) >= 2 and crop_avg:
+                crop_spread = mean(abs(x - crop_avg) for x in crop_yields)
+                crop_stability = round(max(0.0, min(100.0, 100.0 - (crop_spread / crop_avg * 180.0))), 0)
+            else:
+                crop_stability = None
+            by_crop[crop_name] = {
+                "year_count": len(crop_yields),
+                "average_yield": crop_avg,
+                "yield_stability_score": crop_stability,
+            }
+
+        # A bushel average across corn and soybeans is not agronomically valid.
+        # Preserve a simple top-level summary only when the field has one crop in
+        # its usable history; otherwise consumers must use by_crop.
+        single_crop = next(iter(by_crop.values())) if len(by_crop) == 1 else None
         out_fields.append({
             **f,
             "drainage": _loads(f.get("drainage_summary_json"), {}),
             "production_summary": {
                 "year_count": len(years),
-                "average_yield": avg_yield,
-                "yield_stability_score": stability,
+                "average_yield": single_crop.get("average_yield") if single_crop else None,
+                "yield_stability_score": single_crop.get("yield_stability_score") if single_crop else None,
+                "by_crop": by_crop,
+                "ignored_or_collapsed_source_rows": max(0, len(raw_field_records) - len(field_records)),
             },
             "years": years,
         })

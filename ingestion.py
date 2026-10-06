@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from urllib.parse import quote
 
 import httpx
 
+from aph_utils import aph_identity, practice_bucket
 from database import backend_name, connect, json_dumps
 from models import ParsedDocument
 from parsers import PARSER_VERSION, parse_document
@@ -130,7 +132,8 @@ def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocumen
         metadata.update({
             "has_mapped_soi": True,
             "mapped_soi_field_count": len(parsed.fields),
-            "mapped_soi_geometry_count": sum(1 for f in parsed.fields if (f.metadata or {}).get("boundary_geojson")),
+            "mapped_soi_reference_geometry_count": sum(1 for f in parsed.fields if (f.metadata or {}).get("reference_boundary_geojson")),
+            "mapped_soi_geometry_policy": "reference_only",
             "insurance_data_scrubbed": True,
         })
         source = "mapped_soi_upload"
@@ -156,11 +159,10 @@ def _prepare_reprocess(existing) -> None:
     farm_id = int(existing["farm_id"])
     doc_type = str(existing.get("document_type") or "").upper()
     with connect() as conn:
-        # APH is enrichment only. Reprocessing APH must never touch the mapped
-        # parent geometry or soils. Map-source documents may rebuild geometry.
-        if doc_type in {"MBAR", "SOI"}:
-            conn.execute("DELETE FROM field_soils WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
-            conn.execute("DELETE FROM field_locations WHERE field_id IN (SELECT id FROM fields WHERE farm_id=?)", (farm_id,))
+        # Reprocessing a source document must never globally wipe field geometry
+        # or soils. Exact MBAR/manual boundaries are permanent field assets, and
+        # mapped-SOI raster shapes are only references. Touched MBAR fields are
+        # updated individually later in ingestion.
         if doc_type == "APH":
             conn.execute("DELETE FROM aph_unit_matches WHERE source_document_id=?", (document_id,))
         conn.execute("DELETE FROM source_facts WHERE document_id=?", (document_id,))
@@ -170,12 +172,7 @@ def _prepare_reprocess(existing) -> None:
 
 
 def _norm_practice(value: Any) -> str:
-    s = str(value or "").upper().replace("-", "").replace(" ", "")
-    if "NIRR" in s or "NONIRR" in s:
-        return "NIRR"
-    if "IRR" in s:
-        return "IRR"
-    return s
+    return practice_bucket(value)
 
 
 def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -200,9 +197,19 @@ def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> 
                 exact_ids += 1
                 score += 0.22
                 reasons.append(f"FSA {label} match")
+        mapped_meta = {}
+        try:
+            import json
+            mapped_meta = mf.get("metadata_json") if isinstance(mf.get("metadata_json"), dict) else json.loads(mf.get("metadata_json") or "{}")
+        except Exception:
+            mapped_meta = {}
+        # APH matching should use the acreage reported by the source map when
+        # available. Exact polygon acreage is a planning/geography measurement
+        # and can legitimately differ after roads, waterways or pivots are cut.
+        identity_acres = float(mapped_meta.get("reported_acres") or mf.get("acres") or 0)
         mapped_acres = float(mf.get("acres") or 0)
-        if aph_acres and mapped_acres:
-            pct = abs(mapped_acres - aph_acres) / max(aph_acres, 1)
+        if aph_acres and identity_acres:
+            pct = abs(identity_acres - aph_acres) / max(aph_acres, 1)
             if pct <= 0.01:
                 score += 0.28; reasons.append("acreage within 1%")
             elif pct <= 0.03:
@@ -221,14 +228,41 @@ def _aph_match_candidates(parsed_field, mapped_fields: list[dict[str, Any]]) -> 
             "exact_fsa_parts": exact_ids,
             "reasons": reasons,
             "mapped_acres": mapped_acres,
+            "identity_acres": identity_acres,
             "aph_acres": aph_acres,
         })
-    return sorted(out, key=lambda x: (-x["score"], abs(x["mapped_acres"] - x["aph_acres"])))
+    return sorted(out, key=lambda x: (-x["score"], abs(x["identity_acres"] - x["aph_acres"])))
+
+
+def _norm_location_token(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", str(value or "").upper())
+
+
+def _norm_section(value: Any) -> str:
+    s = re.sub(r"\D+", "", str(value or ""))
+    return str(int(s)) if s else ""
+
+
+def _norm_field_name(value: Any) -> str:
+    s = str(value or "").upper()
+    s = re.sub(r"\s*[—-]\s*FIELD\s+\d+\s*$", "", s)
+    s = re.sub(r"\bFIELD\s+\d+\s*$", "", s)
+    s = re.sub(r"[^A-Z0-9]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _mapped_meta(field: dict[str, Any]) -> dict[str, Any]:
+    try:
+        import json
+        value = field.get("metadata_json")
+        return value if isinstance(value, dict) else json.loads(value or "{}")
+    except Exception:
+        return {}
 
 
 def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> tuple[dict[str, int], int]:
     mapped_fields = [dict(r) for r in conn.execute(
-        "SELECT id,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation FROM fields WHERE farm_id=? ORDER BY name",
+        "SELECT id,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation,metadata_json FROM fields WHERE farm_id=? ORDER BY name",
         (farm_id,),
     ).fetchall()]
     if not mapped_fields:
@@ -237,16 +271,137 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
     units = 0
     for pf in parsed.fields:
         meta = pf.metadata or {}
-        unit_key = str(meta.get("unit") or pf.field_number or pf.name or f"unit-{units+1}")
+        unit_number = str(meta.get("unit") or pf.field_number or pf.name or f"unit-{units+1}")
+        unit_key = aph_identity(pf.crop, pf.practice or pf.irrigation, unit_number)
+        # Mapped SOI carries the exact crop-insurance unit number attached to
+        # each physical FSA field. This is the strongest APH bridge and can map
+        # one APH unit to one or many physical fields without relying on acreage.
+        direct_unit_fields = []
+        direct_unit_memberships = []
+        aph_crop = str(pf.crop or "").upper().strip()
+        aph_match_practice = _norm_practice(pf.practice or pf.irrigation)
+        for mf in mapped_fields:
+            mf_meta = _mapped_meta(mf)
+            memberships = mf_meta.get("insurance_unit_memberships") or []
+            if not isinstance(memberships, list):
+                memberships = []
+            # Backward compatibility for previously parsed mapped SOIs.
+            if not memberships and mf_meta.get("insurance_unit_number"):
+                memberships = [{
+                    "unit_number": mf_meta.get("insurance_unit_number"),
+                    "crop": mf_meta.get("source_crop"),
+                    "practice": mf_meta.get("source_practice"),
+                }]
+            matched_membership = None
+            for membership in memberships:
+                mapped_unit = str(membership.get("unit_number") or "").strip()
+                if mapped_unit != unit_number:
+                    continue
+                mapped_crop = str(membership.get("crop") or "").upper().strip()
+                if mapped_crop and aph_crop and mapped_crop != aph_crop:
+                    continue
+                mapped_practice = _norm_practice(
+                    membership.get("practice") or mf.get("practice") or mf.get("irrigation")
+                )
+                if mapped_practice and aph_match_practice and mapped_practice != aph_match_practice:
+                    continue
+                matched_membership = membership
+                break
+            if matched_membership is not None:
+                direct_unit_fields.append(int(mf["id"]))
+                direct_unit_memberships.append({
+                    "field_id": int(mf["id"]),
+                    "field_name": mf.get("name"),
+                    **matched_membership,
+                })
+
+        # Crop rotation can change the current SOI unit number even though the
+        # physical FSA fields are the same. Use the APH summary's FSA farm +
+        # PLSS section + IRR/NIRR + common farm name as the second identity
+        # bridge, then require the mapped-field acreage group to reconcile.
+        location_group_fields: list[int] = []
+        location_group_acres = 0.0
+        location_group_variance_pct = None
+        aph_farm_number = str(meta.get("fsa_farm_number") or "").strip()
+        aph_tr = _norm_location_token(meta.get("township_range"))
+        aph_section = _norm_section(meta.get("section"))
+        aph_name = _norm_field_name(meta.get("farm_name") or pf.name)
+        aph_practice_bucket = _norm_practice(pf.practice or pf.irrigation)
+        aph_acres_value = float(pf.acres or 0)
+
+        if aph_tr and aph_section:
+            base_location_candidates = []
+            for mf in mapped_fields:
+                mf_meta = _mapped_meta(mf)
+                if _norm_location_token(mf_meta.get("township_range")) != aph_tr:
+                    continue
+                if _norm_section(mf_meta.get("legal_section")) != aph_section:
+                    continue
+                mapped_practice_bucket = _norm_practice(
+                    mf_meta.get("source_practice") or mf.get("practice") or mf.get("irrigation")
+                )
+                if aph_practice_bucket and mapped_practice_bucket and aph_practice_bucket != mapped_practice_bucket:
+                    continue
+                base_location_candidates.append(mf)
+
+            # NAU's APH summary labels this identifier "Fsn/Tract"; it is not
+            # consistently the same number printed as FSA Farm on the mapped SOI.
+            # A common farm name + PLSS + practice is therefore a safer bridge
+            # than rejecting a field solely because those number systems differ.
+            generic_names = {"", "OTHER IDENT", "OTHER", "UNKNOWN", "NAU UNIT"}
+            name_candidates = []
+            if aph_name not in generic_names:
+                name_candidates = [
+                    mf for mf in base_location_candidates
+                    if _norm_field_name(mf.get("name")) == aph_name
+                ]
+            number_candidates = [
+                mf for mf in base_location_candidates
+                if aph_farm_number and str(mf.get("farm_number") or "").strip() == aph_farm_number
+            ]
+            location_candidates = name_candidates or number_candidates
+
+            if location_candidates:
+                location_group_fields = sorted({int(mf["id"]) for mf in location_candidates})
+                location_group_acres = round(sum(float(mf.get("acres") or 0) for mf in location_candidates), 2)
+                if aph_acres_value > 0:
+                    location_group_variance_pct = abs(location_group_acres - aph_acres_value) / aph_acres_value * 100.0
+
         candidates = _aph_match_candidates(pf, mapped_fields)
         top = candidates[0] if candidates else None
         auto_field_id = None
         status = "unmatched"
         method = "needs_confirmation"
         confidence = top["score"] if top else 0.0
-        # Only auto-attach when regulatory identity is strong. Acreage alone is
-        # useful for suggestions but is never enough to silently assign APH.
-        if top and top.get("exact_fsa_parts", 0) >= 2 and top["score"] >= 0.55:
+        confirmed_group_fields: list[int] = []
+        if direct_unit_fields:
+            direct_unit_fields = sorted(set(direct_unit_fields))
+            confirmed_group_fields = direct_unit_fields
+            auto_field_id = direct_unit_fields[0] if len(direct_unit_fields) == 1 else None
+            status = "confirmed"
+            method = "mapped_soi_unit_identity"
+            confidence = 0.99
+            if auto_field_id is not None:
+                matches[unit_key] = auto_field_id
+        elif (
+            location_group_fields
+            and aph_acres_value > 0
+            and location_group_variance_pct is not None
+            and (
+                abs(location_group_acres - aph_acres_value) <= 2.0
+                or location_group_variance_pct <= 4.0
+            )
+        ):
+            confirmed_group_fields = location_group_fields
+            auto_field_id = location_group_fields[0] if len(location_group_fields) == 1 else None
+            status = "confirmed"
+            method = "mapped_soi_location_group"
+            confidence = 0.96 if location_group_variance_pct <= 2.0 else 0.92
+            if auto_field_id is not None:
+                matches[unit_key] = auto_field_id
+        # FSA identity remains a safe fallback when a carrier map does not
+        # expose unit linkage. Acreage alone never silently assigns APH.
+        elif top and top.get("exact_fsa_parts", 0) >= 2 and top["score"] >= 0.55:
             auto_field_id = int(top["field_id"])
             status = "confirmed"
             method = "fsa_identity_auto"
@@ -258,7 +413,16 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "fsa_farm_number": meta.get("fsa_farm_number"),
             "fsa_tract_number": meta.get("fsa_tract_number"),
             "fsa_field_number": meta.get("fsa_field_number"),
-            "unit_number": meta.get("unit") or pf.field_number,
+            "unit_number": unit_number,
+            "identity_key": unit_key,
+            "mapped_soi_field_ids": direct_unit_fields,
+            "mapped_soi_memberships": direct_unit_memberships,
+            "mapped_soi_location_field_ids": location_group_fields,
+            "mapped_soi_location_acres": location_group_acres or None,
+            "mapped_soi_location_variance_pct": round(location_group_variance_pct, 2) if location_group_variance_pct is not None else None,
+            "township_range": meta.get("township_range"),
+            "section": meta.get("section"),
+            "farm_name": meta.get("farm_name"),
             "candidates": candidates[:8],
         }
         conn.execute(
@@ -268,6 +432,19 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
             (farm_id, document_id, unit_key, auto_field_id, status, confidence, method, json_dumps(match_meta)),
         )
+        if confirmed_group_fields:
+            match_row = conn.execute(
+                "SELECT id FROM aph_unit_matches WHERE source_document_id=? AND unit_key=?",
+                (document_id, unit_key),
+            ).fetchone()
+            if match_row:
+                match_id = int(match_row["id"])
+                conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
+                for fid in confirmed_group_fields:
+                    conn.execute(
+                        "INSERT INTO aph_unit_field_links(match_id,field_id) VALUES(?,?) ON CONFLICT(match_id,field_id) DO NOTHING",
+                        (match_id, fid),
+                    )
         units += 1
     return matches, units
 
@@ -327,17 +504,39 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 key_parts = [str(x or "") for x in [f.farm_number, f.tract_number, f.field_number]]
                 local_key = "|".join(x for x in key_parts if x) or f.name or f"field-{i+1}"
                 field_key = f"{farm_id}:{local_key}"
+                source_meta = dict(f.metadata or {})
+                if f.acres is not None:
+                    source_meta["reported_acres"] = float(f.acres)
+                    source_meta["reported_acres_source"] = parsed.document_type
+                existing_field = conn.execute(
+                    "SELECT metadata_json FROM fields WHERE field_key=?",
+                    (field_key,),
+                ).fetchone()
+                existing_meta = {}
+                if existing_field:
+                    try:
+                        import json
+                        existing_meta = existing_field.get("metadata_json") if isinstance(existing_field.get("metadata_json"), dict) else json.loads(existing_field.get("metadata_json") or "{}")
+                    except Exception:
+                        existing_meta = {}
+                # Preserve permanent/manual geometry metadata while refreshing
+                # map-source identity metadata.
+                merged_meta = {**existing_meta, **source_meta}
                 conn.execute(
                     "INSERT INTO fields(farm_id,field_key,name,acres,county,state,farm_number,tract_number,field_number,crop,practice,irrigation,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(field_key) DO UPDATE SET name=excluded.name,acres=COALESCE(excluded.acres,fields.acres),county=COALESCE(excluded.county,fields.county),state=COALESCE(excluded.state,fields.state),farm_number=COALESCE(excluded.farm_number,fields.farm_number),tract_number=COALESCE(excluded.tract_number,fields.tract_number),field_number=COALESCE(excluded.field_number,fields.field_number),crop=CASE WHEN excluded.crop IS NULL THEN fields.crop ELSE excluded.crop END,practice=COALESCE(excluded.practice,fields.practice),irrigation=COALESCE(excluded.irrigation,fields.irrigation),metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
-                    (farm_id, field_key, f.name, f.acres, f.county, f.state, f.farm_number, f.tract_number, f.field_number, f.crop, f.practice, f.irrigation, json_dumps(f.metadata)),
+                    (farm_id, field_key, f.name, f.acres, f.county, f.state, f.farm_number, f.tract_number, f.field_number, f.crop, f.practice, f.irrigation, json_dumps(merged_meta)),
                 )
                 field_row = conn.execute("SELECT id FROM fields WHERE field_key=?", (field_key,)).fetchone()
                 field_id = int(field_row["id"])
                 field_id_by_key[local_key] = field_id
                 if f.field_number:
                     field_id_by_key[str(f.field_number)] = field_id
-                if parsed.document_type in {"MBAR", "SOI"} and (f.metadata or {}).get("boundary_geojson"):
+                # Only exact MBAR/GIS geometry becomes an authoritative field
+                # boundary automatically. Mapped-SOI raster geometry is retained
+                # in metadata as a reference locator and must be confirmed or
+                # replaced before SSURGO/seed placement uses it.
+                if parsed.document_type == "MBAR" and (f.metadata or {}).get("boundary_geojson"):
                     field_boundaries.append((field_id, f.metadata["boundary_geojson"]))
 
         for r in parsed.crop_records:
@@ -360,7 +559,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
                 (round(mapped_acres, 2), prospect_id),
             )
 
-    if parsed.document_type in {"MBAR", "SOI"} and field_boundaries:
+    if parsed.document_type == "MBAR" and field_boundaries:
         from soil_service import set_exact_boundary
         for field_id, boundary in field_boundaries:
             try:

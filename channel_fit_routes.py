@@ -257,14 +257,14 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
     crop = _normalize_crop(crop)
     with connect() as conn:
         direct = rows_to_dicts(conn.execute(
-            "SELECT cr.crop_year,cr.yield_value,cr.approved_yield,e.precipitation_in,e.heat_days_95,e.heat_days_90 "
+            "SELECT cr.crop_year,cr.yield_value,cr.approved_yield,e.precipitation_in,e.heat_days_95,e.heat_days_90,e.enso_phase,e.enso_index "
             "FROM crop_records cr LEFT JOIN field_year_environment e ON e.field_id=? AND e.crop_year=cr.crop_year "
             "WHERE cr.field_id=? AND upper(cr.crop)=? AND cr.yield_value IS NOT NULL ORDER BY cr.crop_year",
             (field_id, field_id, crop),
         ).fetchall())
         linked_raw = rows_to_dicts(conn.execute(
             "SELECT cr.crop_year,cr.yield_value,cr.approved_yield,cr.metadata_json,m.unit_key,"
-            "e.precipitation_in,e.heat_days_95,e.heat_days_90 "
+            "e.precipitation_in,e.heat_days_95,e.heat_days_90,e.enso_phase,e.enso_index "
             "FROM aph_unit_field_links l "
             "JOIN aph_unit_matches m ON m.id=l.match_id "
             "JOIN crop_records cr ON cr.source_document_id=m.source_document_id "
@@ -306,6 +306,21 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
         if stress and normal and mean(normal) > 0:
             sensitivity = round(max(-0.5, min(0.5, (mean(normal) - mean(stress)) / mean(normal))), 3)
 
+    enso_groups: dict[str, list[float]] = {}
+    for r in rows:
+        phase = str(r.get("enso_phase") or "").strip()
+        if phase and r.get("yield_value") is not None:
+            enso_groups.setdefault(phase, []).append(float(r["yield_value"]))
+    enso_yield_profile = {
+        phase: {"years": len(vals), "average_yield": round(mean(vals), 1)}
+        for phase, vals in enso_groups.items()
+    }
+    enso_downside = None
+    la = enso_groups.get("La Nina") or []
+    comparison = (enso_groups.get("Neutral") or []) + (enso_groups.get("El Nino") or [])
+    if len(la) >= 2 and len(comparison) >= 3 and mean(comparison) > 0:
+        enso_downside = round(max(-0.5, min(0.5, (mean(comparison) - mean(la)) / mean(comparison))), 3)
+
     approved_rows = [
         r for r in rows
         if r.get("approved_yield") is not None
@@ -327,6 +342,8 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
         "hot_dry_sensitivity": sensitivity,
         "weather_year_count": len(weather_rows),
         "stress_year_count": stress_years,
+        "enso_yield_profile": enso_yield_profile,
+        "la_nina_yield_downside": enso_downside,
     }
 
 
@@ -348,6 +365,18 @@ def _aph_production_fit(crop: str, meta: dict[str, Any], tags: set[str], context
         if "stress" in tags or "drought" in tags or "broad_acre" in tags:
             points += 4.0
             reasons.append(f"APH history is variable ({int(stability)}/100), increasing value of defensive placement")
+
+    enso_downside = context.get("la_nina_yield_downside")
+    if enso_downside is not None and enso_downside >= 0.08:
+        if _normalize_crop(crop) == "CORN":
+            drought = _numeric_rating(chars, "DROUGHT_TOLERANCE_USCB", "DROUGHT TOLERANCE")
+            pts = _quality_points(drought, 3.0)
+            points += pts
+            if pts >= 1.5:
+                reasons.append(f"APH history shows about {round(enso_downside*100)}% La Nina yield downside; drought tolerance gets modest extra weight")
+        elif "stress" in tags or "drought" in tags:
+            points += 2.0
+            reasons.append(f"APH history shows about {round(enso_downside*100)}% La Nina yield downside; stress tolerance gets modest extra weight")
 
     if sensitivity is not None and sensitivity >= 0.08:
         if _normalize_crop(crop) == "CORN":

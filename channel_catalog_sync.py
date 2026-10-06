@@ -278,13 +278,19 @@ def channel_catalog_client_discovery(crop: str = "corn"):
         for needle in ("seed-products", "seed-filters"):
             pos = low.find(needle)
             if pos >= 0:
+                urls = sorted(set(re.findall(r'https?://[^"'\\\\\s)]+', js)))
+                graph_positions = [m.start() for m in re.finditer("graphql", low)]
+                graph_snippets = [js[max(0,p-1200):p+1800] for p in graph_positions[:8]]
                 matches.append({
                     "src": src,
                     "needle": needle,
-                    "snippet": js[max(0,pos-1800):pos+3000],
+                    "urls": urls[:80],
+                    "snippet": js[max(0,pos-5000):pos+5000],
+                    "graphql_snippets": graph_snippets,
                 })
                 break
-    return {"checked_scripts": checked, "matches": matches[:12]}
+    html_urls = sorted(set(re.findall(r'https?://[^"'\\\\\s<]+', r.text)))
+    return {"checked_scripts": checked, "html_urls": html_urls[:100], "matches": matches[:12]}
 
 
 # Temporary operator endpoint used to seed the live catalog. Remove/lock down after sync.

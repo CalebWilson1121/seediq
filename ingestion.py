@@ -274,10 +274,25 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
 def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = None, reprocess: bool = False, target_farm_id: int | None = None) -> dict[str, Any]:
     sha = sha256_file(temp_path)
     with connect() as conn:
-        existing = conn.execute("SELECT * FROM documents WHERE sha256=?", (sha,)).fetchone()
+        if target_farm_id is not None:
+            existing = conn.execute("SELECT * FROM documents WHERE sha256=? AND farm_id=?", (sha, target_farm_id)).fetchone()
+        else:
+            existing = conn.execute("SELECT * FROM documents WHERE sha256=? ORDER BY id DESC LIMIT 1", (sha,)).fetchone()
         if existing and not reprocess:
             prospect = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (existing["farm_id"],)).fetchone()
-            return {"duplicate": True, "document_id": existing["id"], "farm_id": existing["farm_id"], "prospect_id": int(prospect["id"]) if prospect else None, "status": existing["status"], "storage": existing["stored_path"], "message": "Already imported. Use reprocess=true after a parser upgrade to rebuild normalized data."}
+            crop_count = conn.execute("SELECT COUNT(*) AS n FROM crop_records WHERE source_document_id=?", (existing["id"],)).fetchone()
+            match_count = conn.execute("SELECT COUNT(*) AS n FROM aph_unit_matches WHERE source_document_id=?", (existing["id"],)).fetchone()
+            return {
+                "duplicate": True,
+                "document_id": existing["id"],
+                "farm_id": existing["farm_id"],
+                "prospect_id": int(prospect["id"]) if prospect else None,
+                "status": existing["status"],
+                "storage": existing["stored_path"],
+                "aph_units_parsed": int(match_count["n"] or 0) if match_count else 0,
+                "crop_records_created": int(crop_count["n"] or 0) if crop_count else 0,
+                "message": "Already imported for this farm."
+            }
     if existing and reprocess:
         _prepare_reprocess(existing)
 

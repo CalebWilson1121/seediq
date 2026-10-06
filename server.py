@@ -55,6 +55,11 @@ class CropRequest(BaseModel):
     crop_year: int
     crop: str | None = None
 
+class FarmDefaultsRequest(BaseModel):
+    tillage: str | None = None
+    row_spacing: str = "NORMAL"
+    planting_window: str = "NORMAL"
+
 class RotateRequest(BaseModel):
     from_year: int
     to_year: int
@@ -264,6 +269,35 @@ def farm_context(farm_id: int):
         return build_farm_context(farm_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/api/farms/{farm_id}/defaults")
+def update_farm_defaults(farm_id: int, req: FarmDefaultsRequest):
+    tillage = (req.tillage or "").upper().strip() or None
+    row_spacing = (req.row_spacing or "NORMAL").upper().strip()
+    planting_window = (req.planting_window or "NORMAL").upper().strip()
+    valid_tillage = {None, "NO_TILL", "STRIP_TILL", "MIN_TILL", "CONVENTIONAL"}
+    valid_rows = {"NORMAL", "15_IN", "20_IN", "30_IN", "TWIN_ROW"}
+    valid_windows = {"EARLY", "NORMAL", "LATE"}
+    if tillage not in valid_tillage:
+        raise HTTPException(status_code=400, detail="Tillage must be No-Till, Strip-Till, Min-Till, or Conventional")
+    if row_spacing not in valid_rows:
+        raise HTTPException(status_code=400, detail="Invalid row spacing")
+    if planting_window not in valid_windows:
+        raise HTTPException(status_code=400, detail="Invalid planting window")
+    with connect() as conn:
+        farm = conn.execute("SELECT id FROM farms WHERE id=?", (farm_id,)).fetchone()
+        if not farm:
+            raise HTTPException(status_code=404, detail="Farm not found")
+        conn.execute(
+            "UPDATE farms SET default_tillage=?,default_row_spacing=?,default_planting_window=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (tillage, row_spacing, planting_window, farm_id),
+        )
+        updated = conn.execute(
+            "SELECT id,farm_name,producer_name,default_tillage,default_row_spacing,default_planting_window FROM farms WHERE id=?",
+            (farm_id,),
+        ).fetchone()
+    return row_to_dict(updated)
 
 @app.get("/api/farms/{farm_id}/crop-plans")
 def get_crop_plans(farm_id: int, crop_year: int):

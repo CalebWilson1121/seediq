@@ -4,7 +4,8 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from shapely.geometry import shape
+from shapely.geometry import shape, mapping
+from shapely.ops import unary_union
 
 from database import backend_name, connect, json_dumps, row_to_dict
 from soil_service import enrich_field, set_exact_boundary
@@ -20,6 +21,7 @@ class ManualFieldRequest(BaseModel):
     enrich_soils: bool = True
     base_boundary_geojson: dict | None = None
     cut_polygons: list[dict] | None = None
+    split_parent_field_id: int | None = None
 
 
 class FieldBoundaryUpdateRequest(BaseModel):
@@ -30,10 +32,11 @@ class FieldBoundaryUpdateRequest(BaseModel):
     enrich_soils: bool = True
     base_boundary_geojson: dict | None = None
     cut_polygons: list[dict] | None = None
+    split_parent_field_id: int | None = None
 
 
-def _boundary_edit_metadata(base_boundary_geojson, cut_polygons):
-    return {
+def _boundary_edit_metadata(base_boundary_geojson, cut_polygons, split_parent_field_id=None):
+    meta = {
         "boundary_source": "manual_draw",
         "management_field": True,
         "boundary_edit": {
@@ -41,6 +44,10 @@ def _boundary_edit_metadata(base_boundary_geojson, cut_polygons):
             "cut_polygons": cut_polygons or [],
         },
     }
+    if split_parent_field_id is not None:
+        meta["split_parent_field_id"] = int(split_parent_field_id)
+        meta["split_created"] = True
+    return meta
 
 
 def _insert_field(farm_id: int, name: str, acres: float | None, irrigation: str | None) -> int:
@@ -92,7 +99,7 @@ def create_manual_field(farm_id: int, req: ManualFieldRequest):
         with connect() as conn:
             conn.execute(
                 "UPDATE fields SET metadata_json=?::jsonb WHERE id=?",
-                (json_dumps(_boundary_edit_metadata(req.base_boundary_geojson or req.boundary_geojson, req.cut_polygons)), field_id),
+                (json_dumps(_boundary_edit_metadata(req.base_boundary_geojson or req.boundary_geojson, req.cut_polygons, req.split_parent_field_id)), field_id),
             )
         try:
             location = set_exact_boundary(field_id, req.boundary_geojson)
@@ -197,3 +204,81 @@ def update_field_boundary(field_id: int, req: FieldBoundaryUpdateRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Field edit could not be saved: {str(exc)[:220]}") from exc
+
+
+def _json_obj(value):
+    if isinstance(value, dict):
+        return value
+    try:
+        import json
+        return json.loads(value or "{}")
+    except Exception:
+        return {}
+
+
+@router.delete("/api/fields/{field_id}")
+def delete_split_field(field_id: int):
+    try:
+        with connect() as conn:
+            child = conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
+            if not child:
+                raise KeyError(f"Field {field_id} not found")
+            meta = _json_obj(child.get("metadata_json"))
+            parent_id = meta.get("split_parent_field_id")
+            if parent_id is None:
+                import re
+                name = str(child.get("name") or "").strip()
+                base_name = re.sub(r"\s+new(?:\s+\d+)?$", "", name, flags=re.I).strip()
+                if base_name != name:
+                    parent = conn.execute(
+                        "SELECT * FROM fields WHERE farm_id=? AND lower(name)=lower(?) AND id<>? ORDER BY id LIMIT 1",
+                        (child["farm_id"], base_name, field_id),
+                    ).fetchone()
+                    if parent:
+                        parent_id = int(parent["id"])
+            if parent_id is None:
+                raise ValueError("Only split-created fields can be deleted here")
+
+            parent = conn.execute("SELECT * FROM fields WHERE id=?", (int(parent_id),)).fetchone()
+            child_loc = conn.execute("SELECT * FROM field_locations WHERE field_id=?", (field_id,)).fetchone()
+            parent_loc = conn.execute("SELECT * FROM field_locations WHERE field_id=?", (int(parent_id),)).fetchone()
+            if not parent or not child_loc or not parent_loc:
+                raise ValueError("Split field or parent boundary is unavailable")
+
+        from soil_service import _loads
+        merged = unary_union([
+            shape(_loads(parent_loc.get("boundary_geojson"), {})),
+            shape(_loads(child_loc.get("boundary_geojson"), {})),
+        ])
+        if not merged.is_valid:
+            merged = merged.buffer(0)
+        if merged.geom_type not in {"Polygon", "MultiPolygon"} or merged.is_empty:
+            raise ValueError("Could not restore split acreage to the parent field")
+
+        merged_geo = mapping(merged)
+        parent_location = set_exact_boundary(int(parent_id), merged_geo)
+        parent_soil = enrich_field(int(parent_id), force=True)
+        restored_acres = float(parent.get("acres") or 0) + float(child.get("acres") or 0)
+
+        with connect() as conn:
+            pmeta = _json_obj(parent.get("metadata_json"))
+            pmeta["boundary_source"] = "split_undo"
+            pmeta["boundary_edit"] = {"base_boundary_geojson": merged_geo, "cut_polygons": []}
+            conn.execute(
+                "UPDATE fields SET acres=?,metadata_json=?::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (round(restored_acres, 2), json_dumps(pmeta), int(parent_id)),
+            )
+            conn.execute("DELETE FROM fields WHERE id=?", (field_id,))
+
+        _refresh_prospect_acres(int(child["farm_id"]))
+        return {
+            "deleted_field_id": field_id,
+            "restored_parent_field_id": int(parent_id),
+            "restored_parent_acres": round(restored_acres, 2),
+            "location": parent_location,
+            "soil": parent_soil,
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Split field could not be deleted: {str(exc)[:220]}") from exc

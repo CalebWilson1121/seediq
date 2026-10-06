@@ -236,6 +236,29 @@ def _audit_practice_bucket(value):
     return raw or "UNKNOWN"
 
 
+def _audit_name_tokens(value):
+    import re
+    text = str(value or "").upper()
+    text = re.sub(r"\s*[—-]\s*FIELD\s+\d+\s*$", "", text)
+    text = re.sub(r"\s*\(\d+\)\s*$", "", text)
+    text = re.sub(r"\b(?:IRR|NIRR|IRRIGATED|NON\s*IRR(?:IGATED)?)\b", " ", text)
+    text = re.sub(r"[^A-Z0-9]+", " ", text)
+    return [x for x in re.sub(r"\s+", " ", text).strip().split(" ") if x]
+
+
+def _audit_name_similarity(a, b):
+    aa, bb = set(_audit_name_tokens(a)), set(_audit_name_tokens(b))
+    if not aa or not bb:
+        return 0.0
+    return len(aa & bb) / len(aa | bb)
+
+
+def _audit_exact_root(value):
+    import re
+    text = str(value or "")
+    return re.sub(r"\s*\(\d+\)\s*$", "", text).strip()
+
+
 @router.get("/api/audit/aph-to-exact-crosswalk")
 def audit_aph_to_exact_crosswalk(identity_farm_id: int, exact_farm_id: int):
     """Read-only APH-unit -> exact management-field spatial crosswalk.
@@ -281,11 +304,19 @@ def audit_aph_to_exact_crosswalk(identity_farm_id: int, exact_farm_id: int):
         link_map.setdefault(int(link["match_id"]), []).append(int(link["field_id"]))
 
     exact = []
+    exact_groups = {}
     for row in exact_rows:
         try:
             geom = shape(row["boundary_geojson"]).buffer(0)
             if not geom.is_empty:
-                exact.append((row, geom))
+                enriched = dict(row)
+                enriched["name_root"] = _audit_exact_root(row.get("name"))
+                exact.append((enriched, geom))
+                group_key = (
+                    enriched["name_root"].upper(),
+                    _audit_practice_bucket(enriched.get("irrigation") or enriched.get("practice")),
+                )
+                exact_groups.setdefault(group_key, []).append((enriched, geom))
         except Exception:
             continue
 
@@ -365,6 +396,55 @@ def audit_aph_to_exact_crosswalk(identity_farm_id: int, exact_farm_id: int):
         candidates.sort(key=lambda x: (-x["source_coverage_pct"], -x["reference_coverage_pct"], abs(x["acres"] - aph_acres)))
 
         selected = [x for x in candidates if x["source_coverage_pct"] >= 55.0]
+
+        # Rough SOI raster outlines can miss a tiny ditch/road-separated piece of
+        # a management field even when the main polygon overlaps correctly.
+        # If a strongly-overlapping exact polygon and the SOI management name
+        # independently identify the same management field, include every exact
+        # fragment with that root/practice before judging acreage. The exact
+        # SeedIQ geometries stay authoritative; the SOI shape is only the locator.
+        identity_management_names = []
+        for fid in identity_ids:
+            fld = identity_by_id.get(fid) or {}
+            try:
+                fmeta = fld.get("metadata_json") if isinstance(fld.get("metadata_json"), dict) else json.loads(fld.get("metadata_json") or "{}")
+            except Exception:
+                fmeta = {}
+            identity_management_names.extend(
+                [x.get("management_name") for x in (fmeta.get("insurance_unit_memberships") or []) if isinstance(x, dict) and x.get("management_name")]
+            )
+            if fmeta.get("management_name"):
+                identity_management_names.append(fmeta.get("management_name"))
+            identity_management_names.append(fld.get("name"))
+
+        strong_roots = set()
+        for candidate in selected:
+            root = _audit_exact_root(candidate.get("name"))
+            if any(_audit_name_similarity(root, nm) >= 0.60 for nm in identity_management_names if nm):
+                strong_roots.add(root.upper())
+
+        if strong_roots:
+            selected_by_id = {int(x["field_id"]): x for x in selected}
+            for (root, root_practice), members in exact_groups.items():
+                if root not in strong_roots:
+                    continue
+                if practice != "UNKNOWN" and root_practice != "UNKNOWN" and practice != root_practice:
+                    continue
+                for source_row, source_geom in members:
+                    fid = int(source_row["id"])
+                    if fid in selected_by_id:
+                        continue
+                    selected_by_id[fid] = {
+                        "field_id": fid,
+                        "name": source_row.get("name"),
+                        "acres": float(source_row.get("acres") or 0),
+                        "source_coverage_pct": 0.0,
+                        "reference_coverage_pct": 0.0,
+                        "included_by_management_root": True,
+                    }
+            selected = list(selected_by_id.values())
+            selected.sort(key=lambda x: str(x.get("name") or ""))
+
         selected_acres = round(sum(x["acres"] for x in selected), 2)
         variance = selected_acres - aph_acres if aph_acres else None
         variance_pct = abs(variance) / aph_acres * 100.0 if aph_acres and variance is not None else None

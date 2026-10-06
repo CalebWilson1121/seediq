@@ -246,15 +246,46 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
         meta = pf.metadata or {}
         unit_number = str(meta.get("unit") or pf.field_number or pf.name or f"unit-{units+1}")
         unit_key = aph_identity(pf.crop, pf.practice or pf.irrigation, unit_number)
+        # Mapped SOI carries the exact crop-insurance unit number attached to
+        # each physical FSA field. This is the strongest APH bridge and can map
+        # one APH unit to one or many physical fields without relying on acreage.
+        direct_unit_fields = []
+        for mf in mapped_fields:
+            try:
+                import json
+                mf_meta = mf.get("metadata_json") if isinstance(mf.get("metadata_json"), dict) else json.loads(mf.get("metadata_json") or "{}")
+            except Exception:
+                mf_meta = {}
+            mapped_unit = str(mf_meta.get("insurance_unit_number") or "").strip()
+            if not mapped_unit or mapped_unit != unit_number:
+                continue
+            mapped_crop = str(mf_meta.get("source_crop") or "").upper().strip()
+            aph_crop = str(pf.crop or "").upper().strip()
+            if mapped_crop and aph_crop and mapped_crop != aph_crop:
+                continue
+            mapped_practice = _norm_practice(mf_meta.get("source_practice") or mf.get("practice") or mf.get("irrigation"))
+            aph_match_practice = _norm_practice(pf.practice or pf.irrigation)
+            if mapped_practice and aph_match_practice and mapped_practice != aph_match_practice:
+                continue
+            direct_unit_fields.append(int(mf["id"]))
+
         candidates = _aph_match_candidates(pf, mapped_fields)
         top = candidates[0] if candidates else None
         auto_field_id = None
         status = "unmatched"
         method = "needs_confirmation"
         confidence = top["score"] if top else 0.0
-        # Only auto-attach when regulatory identity is strong. Acreage alone is
-        # useful for suggestions but is never enough to silently assign APH.
-        if top and top.get("exact_fsa_parts", 0) >= 2 and top["score"] >= 0.55:
+        if direct_unit_fields:
+            direct_unit_fields = sorted(set(direct_unit_fields))
+            auto_field_id = direct_unit_fields[0] if len(direct_unit_fields) == 1 else None
+            status = "confirmed"
+            method = "mapped_soi_unit_identity"
+            confidence = 0.99
+            if auto_field_id is not None:
+                matches[unit_key] = auto_field_id
+        # FSA identity remains a safe fallback when a carrier map does not
+        # expose unit linkage. Acreage alone never silently assigns APH.
+        elif top and top.get("exact_fsa_parts", 0) >= 2 and top["score"] >= 0.55:
             auto_field_id = int(top["field_id"])
             status = "confirmed"
             method = "fsa_identity_auto"
@@ -268,6 +299,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "fsa_field_number": meta.get("fsa_field_number"),
             "unit_number": unit_number,
             "identity_key": unit_key,
+            "mapped_soi_field_ids": direct_unit_fields,
             "candidates": candidates[:8],
         }
         conn.execute(
@@ -277,6 +309,19 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
             (farm_id, document_id, unit_key, auto_field_id, status, confidence, method, json_dumps(match_meta)),
         )
+        if direct_unit_fields:
+            match_row = conn.execute(
+                "SELECT id FROM aph_unit_matches WHERE source_document_id=? AND unit_key=?",
+                (document_id, unit_key),
+            ).fetchone()
+            if match_row:
+                match_id = int(match_row["id"])
+                conn.execute("DELETE FROM aph_unit_field_links WHERE match_id=?", (match_id,))
+                for fid in direct_unit_fields:
+                    conn.execute(
+                        "INSERT INTO aph_unit_field_links(match_id,field_id) VALUES(?,?) ON CONFLICT(match_id,field_id) DO NOTHING",
+                        (match_id, fid),
+                    )
         units += 1
     return matches, units
 

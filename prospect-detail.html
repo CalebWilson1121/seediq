@@ -87,14 +87,13 @@ async function confirmAPHSuggestion(matchId,fieldIds,btn){
     await loadAPHData();render();
   }catch(e){alert(e.message);if(btn){btn.disabled=false;btn.textContent='Confirm'}}
 }
-function focusAPHFields(fieldIds,matchId=null){
+async function focusAPHFields(fieldIds,matchId=null){
   const wanted=new Set((fieldIds||[]).map(Number)),soil=((prospect.soil_status||{}).fields||[]).filter(x=>wanted.has(Number(x.field_id))&&x.boundary_geojson);
   if(!soil.length)return alert('Exact mapped boundary is not available for that suggested group.');
   if(!map||!map.isStyleLoaded())return alert('Map is still loading.');
   let ref=null;
   if(matchId!=null){
-    const item=(aphAuto.suggestions||[]).find(x=>Number(x.match_id)===Number(matchId));
-    ref=item?.suggestion?.reference_geojson||item?.alternatives?.find(x=>x.reference_geojson)?.reference_geojson||null;
+    try{const review=await api('/api/aph-matches/'+matchId+'/review-reference');ref=review.reference_geojson||null}catch{}
   }
   const src=map.getSource('aph-review-reference');
   if(src)src.setData({type:'FeatureCollection',features:ref?[{type:'Feature',properties:{match_id:matchId},geometry:ref}]:[]});

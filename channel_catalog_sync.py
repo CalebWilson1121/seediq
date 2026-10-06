@@ -261,15 +261,23 @@ def channel_catalog_client_discovery():
     src = "/_next/static/chunks/pages/%5Bcrop%5D/%5Bbrand%5D/seed-catalog-74c25bf669a9b3e6.js"
     js = _fetch(BAYER_BASE + src).text
     low = js.lower()
-    pos = low.find("seed-products")
-    urls = sorted(set(re.findall(r'https?://[^"'\\\\\\s)]+', js)))
-    graph_positions = [m.start() for m in re.finditer("graphql", low)]
+    urls = sorted(set(re.findall(r"https?://[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+", js)))
+    def snippets(needle: str, radius: int = 500, limit: int = 6):
+        out = []
+        at = 0
+        while len(out) < limit:
+            p = low.find(needle.lower(), at)
+            if p < 0:
+                break
+            out.append(js[max(0, p-radius):p+radius])
+            at = p + len(needle)
+        return out
     return {
         "src": src,
         "bytes": len(js),
-        "urls": urls[:120],
-        "seed_products_snippet": js[max(0,pos-7000):pos+7000] if pos >= 0 else None,
-        "graphql_snippets": [js[max(0,p-1800):p+2600] for p in graph_positions[:12]],
+        "urls": urls[:80],
+        "graphql_snippets": snippets("/graphql", 650, 6),
+        "seed_products_snippets": snippets("seed-products", 650, 3),
     }
 
 

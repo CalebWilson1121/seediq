@@ -12,7 +12,6 @@ from mapbox_static_routes import router as mapbox_static_router
 from manual_field_routes import router as manual_field_router
 from channel_catalog_sync import router as channel_catalog_sync_router
 from aph_history_routes import router as aph_history_router
-from audit_routes import router as audit_router
 
 app.include_router(large_upload_router)
 app.include_router(seed_planning_router)
@@ -23,7 +22,6 @@ app.include_router(mapbox_static_router)
 app.include_router(manual_field_router)
 app.include_router(channel_catalog_sync_router)
 app.include_router(aph_history_router)
-app.include_router(audit_router)
 
 # server.py has a generic /{page_name}.html route. Keep the farmer share page
 # ahead of that catch-all so public proposal links resolve instead of returning 404.

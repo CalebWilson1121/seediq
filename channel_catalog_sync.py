@@ -221,12 +221,29 @@ def channel_catalog_probe(crop: str = "corn", page: int = 0):
     url = f"{BAYER_BASE}/{crop}/channel/seed-catalog" + (f"?page={page}" if page else "")
     r = _fetch(url)
     rows = _page_products(r.text)
+    data = _next_data(r.text) or {}
+    pp = ((data.get("props") or {}).get("pageProps") or {})
+    dehydrated = pp.get("dehydratedState") or {}
+    query_debug = []
+    for q in dehydrated.get("queries") or []:
+        state = q.get("state") or {}
+        qdata = state.get("data")
+        query_debug.append({
+            "queryKey": q.get("queryKey"),
+            "queryHash": q.get("queryHash"),
+            "data_type": type(qdata).__name__,
+            "data_keys": list(qdata.keys()) if isinstance(qdata, dict) else None,
+            "data_meta": {k:v for k,v in qdata.items() if k != "products"} if isinstance(qdata, dict) else None,
+        })
     return {
         "url": str(r.url),
         "status": r.status_code,
         "bytes": len(r.content),
-        "next_data_found": bool(_next_data(r.text)),
+        "next_data_found": bool(data),
+        "build_id": data.get("buildId"),
+        "access_token_prefix": str(pp.get("accessToken") or "")[:24],
         "product_count": len(rows),
+        "query_debug": query_debug,
         "products": [
             {
                 "title": p.get("title"),

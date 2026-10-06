@@ -80,6 +80,43 @@ CREATE TABLE IF NOT EXISTS crop_records (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS aph_unit_matches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+  source_document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  unit_key TEXT NOT NULL,
+  field_id INTEGER REFERENCES fields(id) ON DELETE SET NULL,
+  match_status TEXT NOT NULL DEFAULT 'unmatched',
+  confidence REAL,
+  method TEXT,
+  metadata_json TEXT DEFAULT '{}',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_document_id, unit_key)
+);
+
+CREATE TABLE IF NOT EXISTS field_year_environment (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  field_id INTEGER NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+  crop_year INTEGER NOT NULL,
+  season_start TEXT,
+  season_end TEXT,
+  precipitation_in REAL,
+  avg_max_temp_f REAL,
+  avg_min_temp_f REAL,
+  heat_days_90 INTEGER,
+  heat_days_95 INTEGER,
+  dry_days INTEGER,
+  gdd_base50 REAL,
+  enso_phase TEXT,
+  enso_index REAL,
+  source TEXT DEFAULT 'Open-Meteo ERA5-Land',
+  metadata_json TEXT DEFAULT '{}',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(field_id, crop_year)
+);
+
 CREATE TABLE IF NOT EXISTS source_facts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   farm_id INTEGER REFERENCES farms(id) ON DELETE CASCADE,

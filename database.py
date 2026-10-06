@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS farms (
   farm_key TEXT UNIQUE NOT NULL,
   farm_name TEXT,
   producer_name TEXT,
+  state TEXT,
+  county TEXT,
   default_tillage TEXT,
   default_row_spacing TEXT DEFAULT 'NORMAL',
   default_planting_window TEXT DEFAULT 'NORMAL',

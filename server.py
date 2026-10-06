@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from ai_service import run_ai_task
@@ -96,6 +96,47 @@ def _require(request: Request, *roles: str):
         return require_role(_user(request), *roles)
     except PermissionError as exc:
         raise HTTPException(status_code=401 if str(exc) == "Login required" else 403, detail=str(exc)) from exc
+
+# Demo/production safety boundary. SeedIQ's app data is server-rendered through
+# FastAPI/Postgres, so protect the application surface even where an individual
+# legacy route has not yet added a role decorator. Farmer proposal share links
+# remain intentionally public.
+_PUBLIC_EXACT_PATHS = {
+    "/login.html",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/health",
+    "/farmer-proposal",
+    "/farmer-proposal.html",
+    "/api/farmer-proposal-page",
+    "/styles.css",
+    "/app.js",
+    "/favicon.ico",
+}
+_PUBLIC_PREFIXES = (
+    "/api/public/proposals/",
+)
+
+
+@app.middleware("http")
+async def require_app_session(request: Request, call_next):
+    path = request.url.path
+    if path in _PUBLIC_EXACT_PATHS or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    user = _user(request)
+    if user:
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Login required"})
+
+    target = "/login.html"
+    if request.url.query:
+        # Keep redirects simple and non-sensitive; the login page can return the
+        # user to the app home after authentication.
+        target += "?next=app"
+    return RedirectResponse(url=target, status_code=303)
 
 @app.get("/api/health")
 def health():

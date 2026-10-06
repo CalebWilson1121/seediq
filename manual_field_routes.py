@@ -16,10 +16,11 @@ class ManualFieldRequest(BaseModel):
     name: str
     boundary_geojson: dict
     acres: float | None = None
+    irrigation: str | None = None
     enrich_soils: bool = True
 
 
-def _insert_field(farm_id: int, name: str, acres: float | None) -> int:
+def _insert_field(farm_id: int, name: str, acres: float | None, irrigation: str | None) -> int:
     field_key = f"manual:{farm_id}:{uuid.uuid4().hex}"
     metadata = {
         "boundary_source": "manual_draw",
@@ -29,8 +30,8 @@ def _insert_field(farm_id: int, name: str, acres: float | None) -> int:
         farm = conn.execute("SELECT id FROM farms WHERE id=?", (farm_id,)).fetchone()
         if not farm:
             raise KeyError(f"Farm {farm_id} not found")
-        sql = "INSERT INTO fields(farm_id,field_key,name,acres,metadata_json) VALUES(?,?,?,?,?)"
-        params = (farm_id, field_key, name, acres, json_dumps(metadata))
+        sql = "INSERT INTO fields(farm_id,field_key,name,acres,irrigation,metadata_json) VALUES(?,?,?,?,?,?)"
+        params = (farm_id, field_key, name, acres, irrigation, json_dumps(metadata))
         if backend_name() == "supabase-postgres":
             row = conn.execute(sql + " RETURNING id", params).fetchone()
             return int(row["id"])
@@ -61,7 +62,10 @@ def create_manual_field(farm_id: int, req: ManualFieldRequest):
         if req.acres is not None and req.acres <= 0:
             raise ValueError("Calculated acres must be greater than zero")
 
-        field_id = _insert_field(farm_id, name, req.acres)
+        irrigation = (req.irrigation or "").upper().strip() or None
+        if irrigation not in {None, "NIRR", "IRR"}:
+            raise ValueError("Irrigation must be NIRR or IRR")
+        field_id = _insert_field(farm_id, name, req.acres, irrigation)
         try:
             location = set_exact_boundary(field_id, req.boundary_geojson)
             soil = enrich_field(field_id, force=True) if req.enrich_soils else None

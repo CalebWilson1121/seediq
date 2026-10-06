@@ -188,6 +188,22 @@ def enrich_field_history_weather(field_id: int):
     return _enrich_weather_for_field(field_id)
 
 
+@router.post("/api/farms/{farm_id}/history/weather")
+def enrich_farm_history_weather(farm_id: int):
+    with connect() as conn:
+        field_ids = [
+            int(r["field_id"])
+            for r in conn.execute(
+                "SELECT DISTINCT field_id FROM crop_records WHERE farm_id=? AND field_id IS NOT NULL ORDER BY field_id",
+                (farm_id,),
+            ).fetchall()
+        ]
+    results = []
+    for field_id in field_ids:
+        results.append(_enrich_weather_for_field(field_id))
+    return {"farm_id": farm_id, "field_count": len(field_ids), "results": results}
+
+
 @router.get("/api/farms/{farm_id}/production-profile")
 def farm_production_profile(farm_id: int):
     with connect() as conn:

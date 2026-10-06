@@ -547,14 +547,15 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
         skipped_existing = 0
         skipped_unassigned = 0
         skipped_no_products = 0
+        yield_goals_backfilled = 0
         for row in rows:
             crop = _normalize_crop(row.get("crop") or row.get("field_crop"))
             if crop not in {"CORN", "SOYBEANS"}:
                 skipped_unassigned += 1
                 continue
-            if row.get("selected_seed_product_id") and not req.overwrite_existing:
-                skipped_existing += 1
-                continue
+
+            # Yield-goal enrichment is independent of seed selection. A field
+            # with an existing manual seed still needs its missing APH yield goal.
             row["production_context"] = _production_context(int(row["field_id"]), crop)
             yield_goal_source = "manual"
             if row.get("yield_goal") is None:
@@ -562,8 +563,25 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
                 if aph_goal is not None:
                     row["yield_goal"] = float(aph_goal)
                     yield_goal_source = row["production_context"].get("aph_yield_goal_source") or "APH"
+                    if not row.get("crop_plan_id"):
+                        conn.execute(
+                            "INSERT INTO field_crop_plans(field_id,crop_year,crop,yield_goal,source,status) VALUES(?,?,?,?,?,?)",
+                            (row["field_id"], req.crop_year, crop, row["yield_goal"], "aph_yield_goal", "planning"),
+                        )
+                        row["crop_plan_id"] = True
+                    else:
+                        conn.execute(
+                            "UPDATE field_crop_plans SET yield_goal=COALESCE(yield_goal,?),updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
+                            (row["yield_goal"], row["field_id"], req.crop_year),
+                        )
+                    yield_goals_backfilled += 1
                 else:
                     yield_goal_source = None
+
+            if row.get("selected_seed_product_id") and not req.overwrite_existing:
+                skipped_existing += 1
+                continue
+
             ranked = _rank_products(row, products_by_crop.get(crop, []))
             eligible_ranked = [x for x in ranked if x.get("location_eligible")]
             if not eligible_ranked:
@@ -607,6 +625,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
         "skipped_existing": skipped_existing,
         "skipped_unassigned": skipped_unassigned,
         "skipped_no_products": skipped_no_products,
+        "yield_goals_backfilled": yield_goals_backfilled,
         "assignments": assignments,
         "method": "Hard field-location maturity gate first; then Channel fit using SSURGO, IRR/NIRR, Bayer ratings, farm management and matched APH/weather production history. Products outside the local maturity window stay in the catalog but cannot be auto-selected. APH influence is conservative and cannot override the location gate.",
     }

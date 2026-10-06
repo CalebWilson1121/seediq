@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 from shapely.geometry import shape, mapping
+from shapely.geometry.polygon import orient
 from shapely import wkt as shapely_wkt
 
 from database import connect, json_dumps, rows_to_dicts
@@ -94,7 +95,23 @@ def fetch_ssurgo(boundary_geojson: dict[str, Any]) -> dict[str, Any]:
     geom = shape(boundary_geojson)
     if geom.geom_type not in {"Polygon", "MultiPolygon"}:
         raise ValueError("Soil enrichment requires a Polygon or MultiPolygon boundary")
-    wkt = geom.wkt.replace("'", "''")
+    if geom.is_empty:
+        raise ValueError("Soil enrichment boundary is empty")
+    if not geom.is_valid:
+        geom = geom.buffer(0)
+    # USDA SDA ultimately runs the WKT through SQL Server geometry/geography.
+    # Generated pivot polygons can contain duplicate closure vertices or more
+    # coordinate precision than that pipeline likes. Normalize, simplify by
+    # ~10 cm, orient polygon rings consistently and emit bounded precision WKT.
+    geom = geom.simplify(0.000001, preserve_topology=True)
+    if geom.geom_type == "Polygon":
+        geom = orient(geom, sign=1.0)
+    elif geom.geom_type == "MultiPolygon":
+        from shapely.geometry import MultiPolygon
+        geom = MultiPolygon([orient(g, sign=1.0) for g in geom.geoms])
+    if geom.is_empty or not geom.is_valid:
+        raise ValueError("Field boundary could not be normalized for USDA Soil Data Access")
+    wkt = shapely_wkt.dumps(geom, rounding_precision=7, trim=True).replace("'", "''")
     query = f"""
 ~DeclareGeometry(@aoi)~
 select @aoi = geometry::STGeomFromText('{wkt}', 4326)

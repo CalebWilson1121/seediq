@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
+from html import unescape
+import re
 from statistics import mean
 from typing import Any
 
@@ -13,10 +15,102 @@ from database import connect, json_dumps, rows_to_dicts
 OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
 NOAA_RONI = "https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt"
 NOAA_ONI = "https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt"
+NOAA_ENSO_PROBABILITIES = "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities/"
+NOAA_ENSO_DISCUSSION = "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.html"
 
 # Crop-season ENSO summary. These overlapping seasons center on Jun-Aug and
 # avoid reducing an entire crop year to a winter ENSO value.
 GROWING_SEASON_ENSO_SEASONS = ("MJJ", "JJA", "JAS")
+
+
+
+def _html_text(value: str) -> str:
+    value = re.sub(r"(?is)<script.*?</script>|<style.*?</style>", " ", value or "")
+    value = re.sub(r"(?s)<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", unescape(value)).strip()
+
+
+def current_enso_outlook(crop_year: int | None = None) -> dict[str, Any]:
+    """Fetch the current official NOAA CPC ENSO probabilities.
+
+    This is deliberately advisory context. SeedIQ never treats ENSO as a
+    deterministic field-weather forecast; it uses the outlook to decide which
+    parts of a field's own historical risk profile deserve more attention.
+    """
+    try:
+        with httpx.Client(timeout=16.0, follow_redirects=True) as client:
+            probs_r = client.get(NOAA_ENSO_PROBABILITIES)
+            probs_r.raise_for_status()
+            disc_r = client.get(NOAA_ENSO_DISCUSSION)
+            disc_r.raise_for_status()
+        probs_text = _html_text(probs_r.text)
+        disc_text = _html_text(disc_r.text)
+
+        issued = None
+        m = re.search(r"Issued\s+([A-Za-z]+\s+\d{4})", probs_text, re.I)
+        if m:
+            issued = m.group(1)
+
+        table: dict[str, dict[str, int]] = {}
+        for season, la, neutral, el in re.findall(
+            r"\b([A-Z]{3})\s+(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})\b",
+            probs_text,
+        ):
+            if season not in table:
+                table[season] = {
+                    "la_nina_pct": int(la),
+                    "neutral_pct": int(neutral),
+                    "el_nino_pct": int(el),
+                }
+
+        status = None
+        sm = re.search(r"ENSO Alert System Status:\s*([^:]+?)(?=Synopsis:|Synopsis|$)", disc_text, re.I)
+        if sm:
+            status = sm.group(1).strip(" .")
+
+        synopsis = None
+        syn = re.search(r"Synopsis:\s*(.+?)(?=In summary|This discussion|$)", disc_text, re.I)
+        if syn:
+            synopsis = syn.group(1).strip()
+            if len(synopsis) > 700:
+                synopsis = synopsis[:697].rsplit(" ",1)[0] + "..."
+
+        # For a 2027 seed decision made in fall/winter 2026, MAM is planting
+        # season context and AMJ is the earliest summer transition signal.
+        planting = table.get("MAM") or table.get("FMA") or table.get("JFM")
+        early_summer = table.get("AMJ") or table.get("MJJ") or table.get("JJA")
+        winter = table.get("DJF") or table.get("NDJ") or table.get("JFM")
+
+        planting_season = "MAM" if "MAM" in table else ("FMA" if "FMA" in table else "JFM" if "JFM" in table else None)
+        early_summer_season = "AMJ" if "AMJ" in table else ("MJJ" if "MJJ" in table else "JJA" if "JJA" in table else None)
+        winter_season = "DJF" if "DJF" in table else ("NDJ" if "NDJ" in table else "JFM" if "JFM" in table else None)
+
+        return {
+            "status": status,
+            "issued": issued,
+            "synopsis": synopsis,
+            "probabilities": table,
+            "winter": {"season": winter_season, **(winter or {})} if winter else None,
+            "planting": {"season": planting_season, **(planting or {})} if planting else None,
+            "early_summer": {"season": early_summer_season, **(early_summer or {})} if early_summer else None,
+            "crop_year": crop_year,
+            "source": "NOAA Climate Prediction Center RONI probabilities",
+            "source_url": NOAA_ENSO_PROBABILITIES,
+            "interpretation_note": "ENSO shifts seasonal odds; it does not predict rainfall or yield for an individual field.",
+        }
+    except Exception as exc:
+        return {
+            "status": None,
+            "issued": None,
+            "probabilities": {},
+            "winter": None,
+            "planting": None,
+            "early_summer": None,
+            "crop_year": crop_year,
+            "source": "NOAA Climate Prediction Center",
+            "error": str(exc)[:180],
+            "interpretation_note": "ENSO shifts seasonal odds; it does not predict rainfall or yield for an individual field.",
+        }
 
 
 def _parse_noaa_index(text: str, value_column: int) -> dict[int, dict[str, float]]:

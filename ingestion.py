@@ -15,6 +15,7 @@ from aph_utils import aph_identity, practice_bucket
 from database import backend_name, connect, json_dumps
 from models import ParsedDocument
 from parsers import PARSER_VERSION, parse_document
+from soi_identity_service import store_soi_identities, suggest_exact_fields_for_aph, refresh_existing_aph_crosswalks
 
 UPLOAD_DIR = Path(__file__).with_name("uploads")
 
@@ -369,12 +370,25 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
 
         candidates = _aph_match_candidates(pf, mapped_fields)
         top = candidates[0] if candidates else None
+        soi_crosswalk = suggest_exact_fields_for_aph(conn, farm_id, pf)
         auto_field_id = None
         status = "unmatched"
         method = "needs_confirmation"
         confidence = top["score"] if top else 0.0
         confirmed_group_fields: list[int] = []
-        if direct_unit_fields:
+
+        # Preferred architecture: the mapped SOI is a separate identity/locator
+        # layer. It may identify the correct exact SeedIQ management fields, but
+        # its rough PDF raster geometry never replaces those exact boundaries.
+        if soi_crosswalk and soi_crosswalk.get("status") == "high" and soi_crosswalk.get("field_ids"):
+            confirmed_group_fields = sorted({int(x) for x in soi_crosswalk["field_ids"]})
+            auto_field_id = confirmed_group_fields[0] if len(confirmed_group_fields) == 1 else None
+            status = "confirmed"
+            method = "mapped_soi_exact_crosswalk"
+            confidence = 0.98
+            if auto_field_id is not None:
+                matches[unit_key] = auto_field_id
+        elif direct_unit_fields:
             direct_unit_fields = sorted(set(direct_unit_fields))
             confirmed_group_fields = direct_unit_fields
             auto_field_id = direct_unit_fields[0] if len(direct_unit_fields) == 1 else None
@@ -424,6 +438,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "section": meta.get("section"),
             "farm_name": meta.get("farm_name"),
             "candidates": candidates[:8],
+            "soi_crosswalk": soi_crosswalk,
         }
         conn.execute(
             "INSERT INTO aph_unit_matches(farm_id,source_document_id,unit_key,field_id,match_status,confidence,method,metadata_json) "
@@ -496,9 +511,24 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
         field_id_by_key: dict[str, int] = {}
         field_boundaries: list[tuple[int, dict]] = []
         aph_units_parsed = 0
+        soi_identities_stored = 0
+        soi_crosswalk_refresh = None
         map_first_aph = parsed.document_type == "APH" and target_farm_id is not None
+        exact_field_count = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM field_locations fl JOIN fields f ON f.id=fl.field_id "
+            "WHERE f.farm_id=? AND fl.boundary_geojson IS NOT NULL",
+            (farm_id,),
+        ).fetchone()["n"] or 0)
+        soi_identity_only = (
+            parsed.document_type == "SOI"
+            and target_farm_id is not None
+            and exact_field_count > 0
+        )
         if map_first_aph:
             field_id_by_key, aph_units_parsed = _prepare_aph_map_first(conn, farm_id, document_id, parsed)
+        elif soi_identity_only:
+            soi_identities_stored = store_soi_identities(conn, farm_id, document_id, parsed)
+            soi_crosswalk_refresh = refresh_existing_aph_crosswalks(conn, farm_id)
         else:
             for i, f in enumerate(parsed.fields):
                 key_parts = [str(x or "") for x in [f.farm_number, f.tract_number, f.field_number]]
@@ -548,7 +578,7 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             conn.execute("INSERT INTO source_facts(farm_id,document_id,entity_type,entity_key,field_name,value_text,value_numeric,unit,source_locator,confidence) VALUES(?,?,?,?,?,?,?,?,?,?)", (farm_id, document_id, fact.entity_type, fact.entity_key, fact.field_name, vtext, vnum, fact.unit, fact.source_locator, fact.confidence))
 
         prospect_id = _upsert_prospect(conn, farm_id, document_id, parsed)
-        if map_first_aph and prospect_id is not None:
+        if (map_first_aph or soi_identity_only) and prospect_id is not None:
             mapped_acres_row = conn.execute(
                 "SELECT COALESCE(SUM(acres),0) AS acres FROM fields WHERE farm_id=?",
                 (farm_id,),
@@ -567,4 +597,4 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             except Exception as exc:
                 parsed.warnings.append(f"Field {field_id} boundary could not be saved: {exc}")
 
-    return {"duplicate": False, "reprocessed": bool(existing and reprocess), "document_id": document_id, "farm_id": farm_id, "prospect_id": prospect_id, "document_type": parsed.document_type, "parser": parser_name, "fields_created_or_updated": (0 if (parsed.document_type == "APH" and target_farm_id is not None) else len(parsed.fields)), "aph_units_parsed": aph_units_parsed, "crop_records_created": len(parsed.crop_records), "facts_stored": len(parsed.facts), "warnings": parsed.warnings, "storage": stored_path, "database": backend_name()}
+    return {"duplicate": False, "reprocessed": bool(existing and reprocess), "document_id": document_id, "farm_id": farm_id, "prospect_id": prospect_id, "document_type": parsed.document_type, "parser": parser_name, "fields_created_or_updated": (0 if (map_first_aph or soi_identity_only) else len(parsed.fields)), "soi_identities_stored": soi_identities_stored, "soi_crosswalk_refresh": soi_crosswalk_refresh, "aph_units_parsed": aph_units_parsed, "crop_records_created": len(parsed.crop_records), "facts_stored": len(parsed.facts), "warnings": parsed.warnings, "storage": stored_path, "database": backend_name()}

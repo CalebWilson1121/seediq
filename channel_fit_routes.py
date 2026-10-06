@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import json
 from statistics import mean, median
 from typing import Any
@@ -400,6 +402,50 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
         "ignored_or_collapsed_source_rows": max(0, len(source_rows) - len(rows)),
     }
 
+def _production_contexts_parallel(rows: list[dict[str, Any]], max_workers: int = 6) -> dict[tuple[int, str], dict[str, Any]]:
+    """Load APH/climate contexts concurrently for whole-farm screens.
+
+    Each field context is independent. Parallelizing the database reads avoids
+    turning a 60+ field demo farm into 100+ serial queries on a serverless request.
+    """
+    keys = []
+    seen = set()
+    for row in rows:
+        crop = _normalize_crop(row.get("crop") or row.get("field_crop"))
+        if crop not in {"CORN", "SOYBEANS"}:
+            continue
+        key = (int(row["field_id"]), crop)
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    if not keys:
+        return {}
+    out: dict[tuple[int, str], dict[str, Any]] = {}
+    workers = max(1, min(max_workers, len(keys)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = {pool.submit(_production_context, field_id, crop): (field_id, crop) for field_id, crop in keys}
+        for future in as_completed(future_map):
+            key = future_map[future]
+            try:
+                out[key] = future.result()
+            except Exception:
+                out[key] = {
+                    "year_count": 0,
+                    "average_yield": None,
+                    "recent_5yr_average": None,
+                    "latest_approved_yield": None,
+                    "aph_yield_goal": None,
+                    "aph_yield_goal_source": None,
+                    "stability_score": None,
+                    "hot_dry_sensitivity": None,
+                    "weather_year_count": 0,
+                    "stress_year_count": 0,
+                    "comparison_year_count": 0,
+                    "ignored_or_collapsed_source_rows": 0,
+                }
+    return out
+
+
 def _aph_production_fit(crop: str, meta: dict[str, Any], tags: set[str], context: dict[str, Any], climate_outlook: dict[str, Any] | None = None) -> tuple[float, list[str]]:
     years = int(context.get("year_count") or 0)
     if years < 3:
@@ -694,13 +740,14 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
         if pcrop in products_by_crop:
             products_by_crop[pcrop].append(p)
 
+    context_map = _production_contexts_parallel(rows)
     outlook = current_enso_outlook(crop_year)
     insights = []
     for row in rows:
         crop = _normalize_crop(row.get("crop") or row.get("field_crop"))
         if crop not in {"CORN", "SOYBEANS"}:
             continue
-        context = _production_context(int(row["field_id"]), crop)
+        context = context_map.get((int(row["field_id"]), crop)) or _production_context(int(row["field_id"]), crop)
         row["production_context"] = context
         row["climate_outlook"] = outlook
         ranked = _rank_products(row, products_by_crop.get(crop, []))
@@ -841,6 +888,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
             if c in products_by_crop:
                 products_by_crop[c].append(p)
 
+        context_map = _production_contexts_parallel(rows)
         climate_outlook = current_enso_outlook(req.crop_year)
         assignments: list[dict[str, Any]] = []
         skipped_existing = 0
@@ -855,7 +903,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
 
             # Yield-goal enrichment is independent of seed selection. A field
             # with an existing manual seed still needs its missing APH yield goal.
-            row["production_context"] = _production_context(int(row["field_id"]), crop)
+            row["production_context"] = context_map.get((int(row["field_id"]), crop)) or _production_context(int(row["field_id"]), crop)
             row["climate_outlook"] = climate_outlook
             yield_goal_source = "manual"
             if row.get("yield_goal") is None:

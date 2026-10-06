@@ -80,6 +80,23 @@ CREATE TABLE IF NOT EXISTS crop_records (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS soi_field_identities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+  source_document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  identity_key TEXT NOT NULL,
+  name TEXT,
+  reported_acres REAL,
+  farm_number TEXT,
+  tract_number TEXT,
+  field_number TEXT,
+  reference_boundary_geojson TEXT,
+  metadata_json TEXT DEFAULT '{}',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_document_id, identity_key)
+);
+
 CREATE TABLE IF NOT EXISTS aph_unit_matches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   farm_id INTEGER NOT NULL REFERENCES farms(id) ON DELETE CASCADE,

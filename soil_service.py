@@ -114,7 +114,7 @@ def fetch_ssurgo(boundary_geojson: dict[str, Any]) -> dict[str, Any]:
     wkt = shapely_wkt.dumps(geom, rounding_precision=7, trim=True).replace("'", "''")
     query = f"""
 ~DeclareGeometry(@aoi)~
-select @aoi = geometry::STGeomFromText('{wkt}', 4326)
+select @aoi = geometry::STGeomFromText('{wkt}', 4326).MakeValid()
 ~DeclareIdGeomTable(@intersectedPolygonGeometries)~
 ~GetClippedMapunits(@aoi,polygon,geo,@intersectedPolygonGeometries)~
 ~DeclareIdGeogTable(@intersectedPolygonGeographies)~
@@ -149,7 +149,9 @@ left join muaggatt MA on M.mukey = MA.mukey
 order by A.area_m2 desc;
 """
     r = httpx.post(SDA_URL, data={"query": query, "format": "JSON+COLUMNNAME"}, timeout=60)
-    r.raise_for_status()
+    if not r.is_success:
+        detail = (r.text or "").strip().replace("\n", " ")[:320]
+        raise RuntimeError(f"USDA Soil Data Access HTTP {r.status_code}: {detail or 'request rejected'}")
     rows = _sda_rows(r.json())
     if not rows:
         raise LookupError("USDA Soil Data Access returned no SSURGO map units for this boundary")

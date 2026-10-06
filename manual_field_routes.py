@@ -18,6 +18,8 @@ class ManualFieldRequest(BaseModel):
     acres: float | None = None
     irrigation: str | None = None
     enrich_soils: bool = True
+    base_boundary_geojson: dict | None = None
+    cut_polygons: list[dict] | None = None
 
 
 class FieldBoundaryUpdateRequest(BaseModel):
@@ -26,6 +28,19 @@ class FieldBoundaryUpdateRequest(BaseModel):
     acres: float | None = None
     irrigation: str | None = None
     enrich_soils: bool = True
+    base_boundary_geojson: dict | None = None
+    cut_polygons: list[dict] | None = None
+
+
+def _boundary_edit_metadata(base_boundary_geojson, cut_polygons):
+    return {
+        "boundary_source": "manual_draw",
+        "management_field": True,
+        "boundary_edit": {
+            "base_boundary_geojson": base_boundary_geojson,
+            "cut_polygons": cut_polygons or [],
+        },
+    }
 
 
 def _insert_field(farm_id: int, name: str, acres: float | None, irrigation: str | None) -> int:
@@ -74,6 +89,11 @@ def create_manual_field(farm_id: int, req: ManualFieldRequest):
         if irrigation not in {None, "NIRR", "IRR"}:
             raise ValueError("Irrigation must be NIRR or IRR")
         field_id = _insert_field(farm_id, name, req.acres, irrigation)
+        with connect() as conn:
+            conn.execute(
+                "UPDATE fields SET metadata_json=?::jsonb WHERE id=?",
+                (json_dumps(_boundary_edit_metadata(req.base_boundary_geojson or req.boundary_geojson, req.cut_polygons)), field_id),
+            )
         try:
             location = set_exact_boundary(field_id, req.boundary_geojson)
             soil = enrich_field(field_id, force=True) if req.enrich_soils else None
@@ -141,10 +161,21 @@ def update_field_boundary(field_id: int, req: FieldBoundaryUpdateRequest):
         if soil and soil.get("total_area_acres"):
             final_acres = float(soil["total_area_acres"])
 
+        existing_meta = {}
+        try:
+            import json
+            existing_meta = field.get("metadata_json") if isinstance(field.get("metadata_json"), dict) else json.loads(field.get("metadata_json") or "{}")
+        except Exception:
+            existing_meta = {}
+        existing_meta["boundary_edit"] = {
+            "base_boundary_geojson": req.base_boundary_geojson or req.boundary_geojson,
+            "cut_polygons": req.cut_polygons or [],
+        }
+        existing_meta["boundary_source"] = "edited_boundary"
         with connect() as conn:
             conn.execute(
-                "UPDATE fields SET name=?,acres=?,irrigation=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (name, final_acres, irrigation, field_id),
+                "UPDATE fields SET name=?,acres=?,irrigation=?,metadata_json=?::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (name, final_acres, irrigation, json_dumps(existing_meta), field_id),
             )
             updated = conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
 

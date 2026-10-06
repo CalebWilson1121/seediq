@@ -347,7 +347,7 @@ def _production_context(field_id: int, crop: str) -> dict[str, Any]:
     }
 
 
-def _aph_production_fit(crop: str, meta: dict[str, Any], tags: set[str], context: dict[str, Any]) -> tuple[float, list[str]]:
+def _aph_production_fit(crop: str, meta: dict[str, Any], tags: set[str], context: dict[str, Any], climate_outlook: dict[str, Any] | None = None) -> tuple[float, list[str]]:
     years = int(context.get("year_count") or 0)
     if years < 3:
         return 0.0, []
@@ -365,6 +365,48 @@ def _aph_production_fit(crop: str, meta: dict[str, Any], tags: set[str], context
         if "stress" in tags or "drought" in tags or "broad_acre" in tags:
             points += 4.0
             reasons.append(f"APH history is variable ({int(stability)}/100), increasing value of defensive placement")
+
+
+    # Forward-looking ENSO is a modest modifier, never a primary selector.
+    # It only matters when this field has enough matched APH history to show
+    # a repeatable response to the forecast phase.
+    outlook = climate_outlook or {}
+    planting = outlook.get("planting") or {}
+    summer = outlook.get("early_summer") or {}
+    el_prob_values = [
+        float(x) for x in (planting.get("el_nino_pct"), summer.get("el_nino_pct"))
+        if x is not None
+    ]
+    forecast_el_prob = mean(el_prob_values) / 100.0 if el_prob_values else 0.0
+    profile = context.get("enso_yield_profile") or {}
+    el_hist = profile.get("El Nino") or {}
+    el_years = int(el_hist.get("years") or 0)
+    el_avg = el_hist.get("average_yield")
+    overall_avg = context.get("average_yield")
+    if forecast_el_prob >= 0.50 and el_years >= 2 and el_avg is not None and overall_avg:
+        el_delta = (float(el_avg) - float(overall_avg)) / float(overall_avg)
+        # Early-summer transition uncertainty deliberately caps the effect.
+        forward_cap = 2.5 if float(summer.get("neutral_pct") or 0) >= float(summer.get("el_nino_pct") or 0) else 3.5
+        if el_delta <= -0.05:
+            if _normalize_crop(crop) == "CORN":
+                drought = _numeric_rating(chars, "DROUGHT_TOLERANCE_USCB", "DROUGHT TOLERANCE")
+                root = _numeric_rating(chars, "ROOT_STRENGTH_USCB", "ROOT STRENGTH")
+                pts = min(forward_cap, _quality_points(drought, 2.2) + _quality_points(root, 1.3))
+                points += pts
+                if pts >= 1.0:
+                    reasons.append(
+                        f"2027 El Nino odds overlap a field history about {round(abs(el_delta)*100)}% below normal in El Nino years; stress/root traits gain modest weight"
+                    )
+            elif "stress" in tags or "drought" in tags:
+                points += min(forward_cap, 2.5)
+                reasons.append(
+                    f"2027 El Nino odds overlap a field history about {round(abs(el_delta)*100)}% below normal in El Nino years; stress stability gains modest weight"
+                )
+        elif el_delta >= 0.05 and ("high_yield" in tags or "high_management" in tags):
+            points += min(forward_cap, 2.5)
+            reasons.append(
+                f"Field has averaged about {round(el_delta*100)}% above normal in El Nino years; 2027 outlook supports preserving top-end yield potential"
+            )
 
     enso_downside = context.get("la_nina_yield_downside")
     if enso_downside is not None and enso_downside >= 0.08:
@@ -458,7 +500,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             row.get("default_row_spacing"),
             row.get("default_planting_window"),
         )
-        aph_points, aph_reasons = _aph_production_fit(crop, meta, tags, production_context)
+        aph_points, aph_reasons = _aph_production_fit(crop, meta, tags, production_context, row.get("climate_outlook"))
         score = round(max(0, min(99, score + trait_points + management_points + aph_points)), 1)
         reasons = aph_reasons + management_reasons + trait_reasons + reasons
         if location_reason:
@@ -604,6 +646,7 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
             continue
         context = _production_context(int(row["field_id"]), crop)
         row["production_context"] = context
+        row["climate_outlook"] = outlook
         ranked = _rank_products(row, products_by_crop.get(crop, []))
         selected_id = int(row["selected_seed_product_id"])
         selected = next((x for x in ranked if int(x.get("seed_product_id") or 0) == selected_id), None)
@@ -673,6 +716,7 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
     row_dict = dict(row)
     production_context = _production_context(field_id, crop)
     row_dict["production_context"] = production_context
+    row_dict["climate_outlook"] = current_enso_outlook(crop_year)
     ranked = _rank_products(row_dict, products)
     eligible_ranked = [x for x in ranked if x.get("location_eligible")]
     drainage = _loads(row.get("drainage_summary_json"), {})
@@ -724,6 +768,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
             if c in products_by_crop:
                 products_by_crop[c].append(p)
 
+        climate_outlook = current_enso_outlook(req.crop_year)
         assignments: list[dict[str, Any]] = []
         skipped_existing = 0
         skipped_unassigned = 0
@@ -738,6 +783,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
             # Yield-goal enrichment is independent of seed selection. A field
             # with an existing manual seed still needs its missing APH yield goal.
             row["production_context"] = _production_context(int(row["field_id"]), crop)
+            row["climate_outlook"] = climate_outlook
             yield_goal_source = "manual"
             if row.get("yield_goal") is None:
                 aph_goal = row["production_context"].get("aph_yield_goal")

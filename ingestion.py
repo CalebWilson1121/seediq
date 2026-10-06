@@ -306,12 +306,10 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
         aph_practice_bucket = _norm_practice(pf.practice or pf.irrigation)
         aph_acres_value = float(pf.acres or 0)
 
-        if aph_farm_number and aph_tr and aph_section:
-            location_candidates = []
+        if aph_tr and aph_section:
+            base_location_candidates = []
             for mf in mapped_fields:
                 mf_meta = _mapped_meta(mf)
-                if str(mf.get("farm_number") or "").strip() != aph_farm_number:
-                    continue
                 if _norm_location_token(mf_meta.get("township_range")) != aph_tr:
                     continue
                 if _norm_section(mf_meta.get("legal_section")) != aph_section:
@@ -321,12 +319,24 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
                 )
                 if aph_practice_bucket and mapped_practice_bucket and aph_practice_bucket != mapped_practice_bucket:
                     continue
-                location_candidates.append(mf)
+                base_location_candidates.append(mf)
 
-            if aph_name:
-                same_name = [mf for mf in location_candidates if _norm_field_name(mf.get("name")) == aph_name]
-                if same_name:
-                    location_candidates = same_name
+            # NAU's APH summary labels this identifier "Fsn/Tract"; it is not
+            # consistently the same number printed as FSA Farm on the mapped SOI.
+            # A common farm name + PLSS + practice is therefore a safer bridge
+            # than rejecting a field solely because those number systems differ.
+            generic_names = {"", "OTHER IDENT", "OTHER", "UNKNOWN", "NAU UNIT"}
+            name_candidates = []
+            if aph_name not in generic_names:
+                name_candidates = [
+                    mf for mf in base_location_candidates
+                    if _norm_field_name(mf.get("name")) == aph_name
+                ]
+            number_candidates = [
+                mf for mf in base_location_candidates
+                if aph_farm_number and str(mf.get("farm_number") or "").strip() == aph_farm_number
+            ]
+            location_candidates = name_candidates or number_candidates
 
             if location_candidates:
                 location_group_fields = sorted({int(mf["id"]) for mf in location_candidates})

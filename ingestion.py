@@ -277,20 +277,43 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
         # each physical FSA field. This is the strongest APH bridge and can map
         # one APH unit to one or many physical fields without relying on acreage.
         direct_unit_fields = []
+        direct_unit_memberships = []
+        aph_crop = str(pf.crop or "").upper().strip()
+        aph_match_practice = _norm_practice(pf.practice or pf.irrigation)
         for mf in mapped_fields:
             mf_meta = _mapped_meta(mf)
-            mapped_unit = str(mf_meta.get("insurance_unit_number") or "").strip()
-            if not mapped_unit or mapped_unit != unit_number:
-                continue
-            mapped_crop = str(mf_meta.get("source_crop") or "").upper().strip()
-            aph_crop = str(pf.crop or "").upper().strip()
-            if mapped_crop and aph_crop and mapped_crop != aph_crop:
-                continue
-            mapped_practice = _norm_practice(mf_meta.get("source_practice") or mf.get("practice") or mf.get("irrigation"))
-            aph_match_practice = _norm_practice(pf.practice or pf.irrigation)
-            if mapped_practice and aph_match_practice and mapped_practice != aph_match_practice:
-                continue
-            direct_unit_fields.append(int(mf["id"]))
+            memberships = mf_meta.get("insurance_unit_memberships") or []
+            if not isinstance(memberships, list):
+                memberships = []
+            # Backward compatibility for previously parsed mapped SOIs.
+            if not memberships and mf_meta.get("insurance_unit_number"):
+                memberships = [{
+                    "unit_number": mf_meta.get("insurance_unit_number"),
+                    "crop": mf_meta.get("source_crop"),
+                    "practice": mf_meta.get("source_practice"),
+                }]
+            matched_membership = None
+            for membership in memberships:
+                mapped_unit = str(membership.get("unit_number") or "").strip()
+                if mapped_unit != unit_number:
+                    continue
+                mapped_crop = str(membership.get("crop") or "").upper().strip()
+                if mapped_crop and aph_crop and mapped_crop != aph_crop:
+                    continue
+                mapped_practice = _norm_practice(
+                    membership.get("practice") or mf.get("practice") or mf.get("irrigation")
+                )
+                if mapped_practice and aph_match_practice and mapped_practice != aph_match_practice:
+                    continue
+                matched_membership = membership
+                break
+            if matched_membership is not None:
+                direct_unit_fields.append(int(mf["id"]))
+                direct_unit_memberships.append({
+                    "field_id": int(mf["id"]),
+                    "field_name": mf.get("name"),
+                    **matched_membership,
+                })
 
         # Crop rotation can change the current SOI unit number even though the
         # physical FSA fields are the same. Use the APH summary's FSA farm +
@@ -393,6 +416,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
             "unit_number": unit_number,
             "identity_key": unit_key,
             "mapped_soi_field_ids": direct_unit_fields,
+            "mapped_soi_memberships": direct_unit_memberships,
             "mapped_soi_location_field_ids": location_group_fields,
             "mapped_soi_location_acres": location_group_acres or None,
             "mapped_soi_location_variance_pct": round(location_group_variance_pct, 2) if location_group_variance_pct is not None else None,

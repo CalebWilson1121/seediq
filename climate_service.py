@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from statistics import mean
 from typing import Any
@@ -61,10 +62,10 @@ def _enso_phase(index_value: float | None) -> str | None:
 
 
 def _grid_key(lat: float, lon: float) -> tuple[float, float]:
-    # ERA5-Land itself is gridded. A 0.05 degree bucket prevents duplicate API
-    # calls for nearby fields without pretending field-level weather precision
-    # exists below the reanalysis grid.
-    return (round(lat / 0.05) * 0.05, round(lon / 0.05) * 0.05)
+    # ERA5-Land itself is a reanalysis grid, not field-level rain-gauge data.
+    # A 0.10 degree bucket is a closer match to its effective spatial scale and
+    # avoids duplicate historical requests for nearby fields.
+    return (round(lat / 0.10) * 0.10, round(lon / 0.10) * 0.10)
 
 
 def _fetch_weather_window(lat: float, lon: float, min_year: int, max_year: int) -> dict[int, dict[str, Any]]:
@@ -196,16 +197,34 @@ def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
     results = []
     years_written = 0
     weather_calls = 0
-    for (grid_lat, grid_lon), members in grid_groups.items():
+
+    weather_by_grid: dict[tuple[float,float], dict[int,dict[str,Any]]] = {}
+    weather_errors: dict[tuple[float,float], str | None] = {}
+
+    # Historical grid pulls are independent; parallelize them so a large farm
+    # does not spend the whole Vercel request window waiting serially.
+    def _fetch_grid(item):
+        (grid_lat, grid_lon), members = item
         all_years = sorted({y for m in members for y in m["years"]})
         try:
-            weather = _fetch_weather_window(grid_lat, grid_lon, min(all_years), max(all_years))
-            weather_calls += 1
-            weather_error = None
+            data = _fetch_weather_window(grid_lat, grid_lon, min(all_years), max(all_years))
+            return (grid_lat, grid_lon), data, None
         except Exception as exc:
-            weather = {}
-            weather_error = str(exc)[:180]
+            return (grid_lat, grid_lon), {}, str(exc)[:180]
 
+    max_workers = min(6, max(1, len(grid_groups)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_fetch_grid, item) for item in grid_groups.items()]
+        for fut in as_completed(futures):
+            key, data, err = fut.result()
+            weather_by_grid[key] = data
+            weather_errors[key] = err
+            weather_calls += 1
+
+    rows_to_write: list[tuple[Any,...]] = []
+    for (grid_lat, grid_lon), members in grid_groups.items():
+        weather = weather_by_grid.get((grid_lat, grid_lon), {})
+        weather_error = weather_errors.get((grid_lat, grid_lon))
         for m in members:
             fid = int(m["field_id"])
             field_results = []
@@ -231,37 +250,19 @@ def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
                     "weather_error": weather_error,
                     "enso_error": enso_error,
                 }
-                with connect() as conn:
-                    conn.execute(
-                        "INSERT INTO field_year_environment(field_id,crop_year,season_start,season_end,precipitation_in,"
-                        "avg_max_temp_f,avg_min_temp_f,heat_days_90,heat_days_95,dry_days,gdd_base50,enso_phase,enso_index,source,metadata_json) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb) "
-                        "ON CONFLICT(field_id,crop_year) DO UPDATE SET "
-                        "season_start=excluded.season_start,season_end=excluded.season_end,"
-                        "precipitation_in=COALESCE(excluded.precipitation_in,field_year_environment.precipitation_in),"
-                        "avg_max_temp_f=COALESCE(excluded.avg_max_temp_f,field_year_environment.avg_max_temp_f),"
-                        "avg_min_temp_f=COALESCE(excluded.avg_min_temp_f,field_year_environment.avg_min_temp_f),"
-                        "heat_days_90=COALESCE(excluded.heat_days_90,field_year_environment.heat_days_90),"
-                        "heat_days_95=COALESCE(excluded.heat_days_95,field_year_environment.heat_days_95),"
-                        "dry_days=COALESCE(excluded.dry_days,field_year_environment.dry_days),"
-                        "gdd_base50=COALESCE(excluded.gdd_base50,field_year_environment.gdd_base50),"
-                        "enso_phase=COALESCE(excluded.enso_phase,field_year_environment.enso_phase),"
-                        "enso_index=COALESCE(excluded.enso_index,field_year_environment.enso_index),"
-                        "source=excluded.source,metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP",
-                        (
-                            fid, year, f"{year}-04-01", f"{year}-10-15",
-                            (wx or {}).get("precipitation_in"),
-                            (wx or {}).get("avg_max_temp_f"),
-                            (wx or {}).get("avg_min_temp_f"),
-                            (wx or {}).get("heat_days_90"),
-                            (wx or {}).get("heat_days_95"),
-                            (wx or {}).get("dry_days"),
-                            (wx or {}).get("gdd_base50"),
-                            phase, primary_index,
-                            "Open-Meteo ERA5-Land + NOAA CPC RONI/ONI",
-                            json_dumps(meta),
-                        ),
-                    )
+                rows_to_write.append((
+                    fid, year, f"{year}-04-01", f"{year}-10-15",
+                    (wx or {}).get("precipitation_in"),
+                    (wx or {}).get("avg_max_temp_f"),
+                    (wx or {}).get("avg_min_temp_f"),
+                    (wx or {}).get("heat_days_90"),
+                    (wx or {}).get("heat_days_95"),
+                    (wx or {}).get("dry_days"),
+                    (wx or {}).get("gdd_base50"),
+                    phase, primary_index,
+                    "Open-Meteo ERA5-Land + NOAA CPC RONI/ONI",
+                    json_dumps(meta),
+                ))
                 years_written += 1
                 field_results.append({
                     "crop_year": year,
@@ -274,6 +275,30 @@ def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
                     "oni": oni_value,
                 })
             results.append({"field_id": fid, "field_name": m.get("name"), "years": field_results})
+
+    # One database connection for the whole farm instead of hundreds of
+    # connection/transaction round trips.
+    if rows_to_write:
+        with connect() as conn:
+            sql = (
+                "INSERT INTO field_year_environment(field_id,crop_year,season_start,season_end,precipitation_in,"
+                "avg_max_temp_f,avg_min_temp_f,heat_days_90,heat_days_95,dry_days,gdd_base50,enso_phase,enso_index,source,metadata_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb) "
+                "ON CONFLICT(field_id,crop_year) DO UPDATE SET "
+                "season_start=excluded.season_start,season_end=excluded.season_end,"
+                "precipitation_in=COALESCE(excluded.precipitation_in,field_year_environment.precipitation_in),"
+                "avg_max_temp_f=COALESCE(excluded.avg_max_temp_f,field_year_environment.avg_max_temp_f),"
+                "avg_min_temp_f=COALESCE(excluded.avg_min_temp_f,field_year_environment.avg_min_temp_f),"
+                "heat_days_90=COALESCE(excluded.heat_days_90,field_year_environment.heat_days_90),"
+                "heat_days_95=COALESCE(excluded.heat_days_95,field_year_environment.heat_days_95),"
+                "dry_days=COALESCE(excluded.dry_days,field_year_environment.dry_days),"
+                "gdd_base50=COALESCE(excluded.gdd_base50,field_year_environment.gdd_base50),"
+                "enso_phase=COALESCE(excluded.enso_phase,field_year_environment.enso_phase),"
+                "enso_index=COALESCE(excluded.enso_index,field_year_environment.enso_index),"
+                "source=excluded.source,metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP"
+            )
+            for row in rows_to_write:
+                conn.execute(sql, row)
 
     return {
         "field_count": len(results),

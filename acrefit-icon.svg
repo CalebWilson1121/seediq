@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" role="img" aria-labelledby="title desc">
+<title id="title">AcreFit icon</title><desc id="desc">AF monogram with field rows</desc>
+<rect width="220" height="220" rx="44" fill="#0F3D2E"/>
+<g transform="translate(28,27)">
+<path d="M10 150 L68 25 Q75 10 88 10 L106 10 L160 150 L127 150 L110 109 L54 109 L34 150 Z" fill="#ffffff"/>
+<path d="M74 84 L91 47 L107 84 Z" fill="#0F3D2E"/>
+<path d="M31 148 C48 125 67 111 92 98" fill="none" stroke="#A7D56B" stroke-width="14" stroke-linecap="round"/>
+<path d="M53 148 C69 128 83 116 103 106" fill="none" stroke="#62B44B" stroke-width="12" stroke-linecap="round"/>
+<path d="M75 148 C88 130 101 119 115 113" fill="none" stroke="#2E8B57" stroke-width="10" stroke-linecap="round"/>
+<path d="M111 10 H184 L170 40 H124 Z" fill="#A7D56B"/>
+<path d="M126 65 H169 L158 91 H136 Z" fill="#ffffff"/>
+</g>
+</svg>

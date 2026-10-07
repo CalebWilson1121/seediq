@@ -209,7 +209,7 @@ def create_dealer_user(organization_id: int, email: str, display_name: str, role
             raise KeyError("Dealer not found")
         existing = conn.execute("SELECT id FROM platform_users WHERE lower(email)=?", (email,)).fetchone()
         if existing:
-            raise ValueError("A AcreFit user with that email already exists")
+            raise ValueError("An AcreFit user with that email already exists")
         seats = int(conn.execute("SELECT COUNT(*) AS n FROM platform_users WHERE organization_id=?", (organization_id,)).fetchone()["n"] or 0)
         if org["max_seats"] is not None and seats >= int(org["max_seats"]):
             raise ValueError("This dealer has reached its licensed seat limit")

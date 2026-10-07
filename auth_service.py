@@ -253,7 +253,8 @@ def dealer_demo_dashboard(organization_id: int) -> dict[str, Any]:
             raise KeyError("Dealer not found")
         prospects = rows_to_dicts(conn.execute(
             "SELECT p.id,p.prospect_name,p.status,p.total_acres,p.metadata_json,f.id AS farm_id,f.producer_name "
-            "FROM prospects p JOIN farms f ON f.id=p.farm_id WHERE p.organization_id=? ORDER BY p.updated_at DESC",
+            "FROM prospects p JOIN farms f ON f.id=p.farm_id WHERE p.organization_id=? "
+            "ORDER BY CASE WHEN p.prospect_name ILIKE '%SeedIQ Demo%' THEN 0 ELSE 1 END, p.updated_at DESC",
             (organization_id,),
         ).fetchall())
         stats = conn.execute(

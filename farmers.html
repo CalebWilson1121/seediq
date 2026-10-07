@@ -1,117 +1,44 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SeedIQ — Farmer & Fields</title>
-<meta name="description" content="Customer farm and field workspace" />
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SeedIQ — Farmer & Fields</title>
 <style>
-:root{
-    --bg:#f4f7f2; --panel:#ffffff; --ink:#162319; --muted:#6b776d; --line:#dfe7df;
-    --green:#1f6f43; --green2:#2f8f5b; --lime:#dff2e5; --gold:#c9992d; --red:#b94a48;
-    --shadow:0 14px 35px rgba(26,53,36,.10);
-  }
-  *{box-sizing:border-box}
-  body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
-  .app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
-  .sidebar{background:#102a1d;color:white;padding:22px 18px;position:sticky;top:0;height:100vh}
-  .brand{font-weight:800;font-size:25px;letter-spacing:-.5px}.brand span{color:#8fd39f}
-  .subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}
-  nav{margin-top:30px;display:grid;gap:8px}
-  nav a{display:block;width:100%;border:0;background:transparent;color:#dce8df;text-align:left;padding:12px 13px;border-radius:10px;font-size:14px;cursor:pointer;text-decoration:none}
-  nav a.active,nav a:hover{background:#1d4b33;color:white}
-  .side-card{margin-top:28px;background:#173c29;border:1px solid #2a6041;border-radius:14px;padding:14px;font-size:12px;color:#cfe0d4}
-  .main{padding:26px 30px 45px}
-  .topbar{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:22px}
-  h1,h2,h3,p{margin-top:0}h1{font-size:28px;margin-bottom:5px}h2{font-size:20px}h3{font-size:15px}
-  .muted{color:var(--muted)}
-  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:white;border-radius:999px;padding:8px 12px;font-size:12px}
-  .dot{width:8px;height:8px;background:#43a66d;border-radius:50%}
-  .grid{display:grid;gap:16px}.kpis{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 2px 10px rgba(25,45,32,.03)}
-  .kpi strong{display:block;font-size:27px;margin-top:5px}.kpi span{font-size:12px;color:var(--muted)}
-  .cols{grid-template-columns:1.25fr .75fr}.cols2{grid-template-columns:1fr 1fr}.cols3{grid-template-columns:repeat(3,1fr)}
-  .table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--line);font-size:13px}.table th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}.table tr:last-child td{border-bottom:0}
-  .btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}.btn.primary{background:var(--green);color:white}.btn.secondary{background:#eaf2ed;color:#17452d}.btn.outline{background:white;border:1px solid var(--line);color:var(--ink)}
-  .field-list{display:grid;gap:10px}.field{padding:13px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:#fff}.field.active{border:2px solid var(--green);background:#f7fbf8}.field .row{display:flex;justify-content:space-between;gap:8px}
-  .map{height:315px;border-radius:16px;background:linear-gradient(135deg,#dce8d2,#a8c397);position:relative;overflow:hidden;border:1px solid #c8d7c4}
-  .map:before,.map:after{content:"";position:absolute;border:2px solid rgba(255,255,255,.65);background:rgba(74,130,75,.22);transform:rotate(-7deg)}
-  .map:before{width:200px;height:130px;left:70px;top:70px;border-radius:22px}.map:after{width:150px;height:95px;right:55px;bottom:50px;border-radius:30px}
-  .map-label{position:absolute;left:24px;bottom:18px;background:rgba(16,42,29,.88);color:white;padding:10px 12px;border-radius:10px;font-size:12px}
-  .riskbar{margin:10px 0}.riskrow{display:grid;grid-template-columns:135px 1fr 38px;gap:10px;align-items:center;font-size:12px}.bar{height:8px;background:#e8eee9;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#72b88d,#256d45);border-radius:999px}
-  .recommendation{border:1px solid var(--line);border-radius:14px;padding:15px;margin-top:12px}.recommendation.top{border:2px solid var(--green);background:#fbfefc}.rec-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.score{background:var(--lime);color:#164d31;border-radius:12px;padding:8px 10px;text-align:center;min-width:76px}.score b{font-size:21px;display:block}.tag{display:inline-block;font-size:10px;font-weight:700;padding:5px 8px;border-radius:999px;background:#eef4f0;margin:3px 4px 0 0}.good{background:#e4f5e9;color:#1c6c3d}.warn{background:#fff2d9;color:#8d6517}.danger{background:#fde8e7;color:#9c3735}
-  .chat{background:#f7faf8;border:1px solid var(--line);border-radius:14px;padding:15px}.chat .bubble{background:white;border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin-top:10px;font-size:13px;line-height:1.45}.chat .prompt{color:#1e5d3b;font-weight:700}
-  .hidden{display:none!important}.section{display:none}.section.active{display:block}
-  .farm-plan{display:grid;grid-template-columns:1fr 1fr;gap:15px}.donut{width:170px;height:170px;border-radius:50%;background:conic-gradient(#245f3d 0 30%,#4d8c64 30% 53%,#79a987 53% 72%,#b2c8aa 72% 86%,#d8e2d2 86%);margin:auto;position:relative}.donut:after{content:"2,860 acres";position:absolute;inset:34px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;text-align:center;padding:10px}
-  .timeline{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.step{border:1px solid var(--line);padding:12px;border-radius:12px;background:#fff}.step b{display:block;margin-bottom:4px}.step small{color:var(--muted)}
-  .footer-note{font-size:11px;color:#7a867d;margin-top:18px}
-  .logo-row{display:flex;align-items:center;gap:10px}.avatar{width:36px;height:36px;border-radius:50%;background:#d9e9df;display:grid;place-items:center;font-weight:800;color:#1d5737}
-
-  .hero{background:linear-gradient(135deg,#123822,#1f6f43);color:white;border-radius:18px;padding:22px;box-shadow:var(--shadow)}
-  .hero h1,.hero h2,.hero h3{color:white}.hero .muted{color:#c9ddcf}
-  .split-kpi{display:flex;justify-content:space-between;align-items:flex-end;gap:10px}
-  .big-num{font-size:34px;font-weight:800;letter-spacing:-1px}
-  .mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.mini{padding:12px;border:1px solid var(--line);border-radius:12px;background:#fbfdfb}
-  .packet-page{background:white;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 8px 20px rgba(25,45,32,.06);position:relative;overflow:hidden}.packet-page:before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--green)}
-  .packet-cover{min-height:330px;display:flex;flex-direction:column;justify-content:space-between;background:linear-gradient(135deg,#f4faf5,#e2efe5)}
-  .packet-brand{font-weight:800;font-size:30px;color:var(--green)}
-  .metric-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f7faf8;border:1px solid var(--line);padding:12px;border-radius:12px}.metric b{display:block;font-size:20px}
-  .status{font-size:10px;font-weight:800;padding:5px 8px;border-radius:999px;display:inline-block}.status.hot{background:#fde8e7;color:#963c39}.status.warm{background:#fff0d2;color:#855f14}.status.sent{background:#e7f2ff;color:#2f5f91}.status.won{background:#e4f5e9;color:#1c6c3d}
-  .input,.select,.textarea{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:9px;background:white;font:inherit}.textarea{min-height:90px;resize:vertical}.label{display:block;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
-  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid .full{grid-column:1/-1}
-  .opp-card{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px;background:white}.opp-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-  .callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0;font-size:13px;line-height:1.5}
-
-  @media(max-width:950px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.kpis,.cols,.cols2,.cols3,.farm-plan{grid-template-columns:1fr}.timeline,.metric-row,.mini-grid,.form-grid{grid-template-columns:1fr 1fr}.main{padding:18px}.sidebar nav{grid-template-columns:repeat(3,1fr)}}
-
-</style>
-</head>
-<body>
-<div class="app">
-  <aside class="sidebar">
-    <div class="brand">Seed<span>IQ</span></div>
-    <div class="subbrand">Seed Intelligence & Sales Platform</div>
-    <nav><a href="index.html" class="">Dashboard</a>
-<a href="farmers.html" class="active">Farmer & Fields</a>
-<a href="field-analysis.html" class="">Field Analysis</a>
-<a href="whole-farm-plan.html" class="">Whole-Farm Plan</a>
-<a href="genetics.html" class="">Seed Genetics</a>
-<a href="prospects.html" class="">Prospect Intelligence</a>
-<a href="sales-packet.html" class="">Sales Packet Builder</a>
-<a href="pipeline.html" class="">Sales Pipeline</a>
-<a href="data-hub.html" class="">Farm Data Hub</a>
-<a href="product-spec.html" class="">Product Spec</a></nav>
-    <div class="side-card"><b>Interactive Prototype</b><br><br>All farmer, soil, weather, hybrid, pipeline and performance data in this demo is fictional sample data.</div>
-  </aside>
-  <main class="main">
-    <div class="topbar"><div><div class="muted" style="font-size:12px">Prairie Ridge Seed • Dealer & Agronomy Portal</div></div><div class="logo-row"><span class="pill"><i class="dot"></i> Engine Online</span><div class="avatar">CW</div></div></div>
-    <div class="workflow"><span class="muted" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em">Workflow</span><a href="prospects.html" class="">Prospect</a><span class="muted">›</span><a href="farmers.html" class="current">Farm & Fields</a><span class="muted">›</span><a href="field-analysis.html" class="">Analyze</a><span class="muted">›</span><a href="whole-farm-plan.html" class="">Plan</a><span class="muted">›</span><a href="sales-packet.html" class="">Proposal</a><span class="muted">›</span><a href="pipeline.html" class="">Pipeline</a></div>
-    <section class="page-section" id="farmer">
-<h1>Wilson Farms</h1>
-<p class="muted">Beattie, Kansas • 2,860 total acres • Conventional tillage / dryland dominant</p>
-<div class="grid cols">
-<div class="card">
-<h2>Farm Map</h2>
-<div class="map"><div class="map-label">Sample field boundary visualization<br/><b>North 80 • 74 acres</b></div></div>
-</div>
-<div class="card">
-<h2>Fields</h2>
-<div class="field-list">
-<div class="field active"><div class="row"><b>North 80</b><span>74 ac</span></div><small class="muted">Corn • Corn/Soy rotation</small></div>
-<div class="field"><div class="row"><b>West Quarter</b><span>151 ac</span></div><small class="muted">Corn • Continuous corn</small></div>
-<div class="field"><div class="row"><b>Creek Bottom</b><span>96 ac</span></div><small class="muted">Corn • Corn/Soy rotation</small></div>
-<div class="field"><div class="row"><b>Home Place</b><span>133 ac</span></div><small class="muted">Corn • Corn/Soy rotation</small></div>
-</div>
-<button class="btn primary" onclick="goto('analysis')" style="margin-top:15px;width:100%">Analyze North 80</button>
-</div>
-</div>
-</section>
-    <p class="footer-note">SeedIQ prototype • All data shown is fictional/sample data for product-concept discussion only.</p>
-  </main>
-</div>
+:root{--bg:#f4f7f2;--panel:#fff;--ink:#162319;--muted:#6b776d;--line:#dfe7df;--green:#1f6f43;--dark:#102a1d;--lime:#dff2e5;--warn:#fff4dc;--blue:#eaf2ff}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{background:var(--dark);color:#fff;padding:22px 18px;position:sticky;top:0;height:100vh}.brand{font-size:25px;font-weight:900}.brand span{color:#8fd39f}.subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}nav{display:grid;gap:7px;margin-top:28px}nav a{color:#dce8df;text-decoration:none;padding:11px 12px;border-radius:10px;font-size:14px}nav a:hover,nav a.active{background:#1d4b33}.main{padding:28px 32px 48px}.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}.grid{display:grid;gap:16px}.kpis{grid-template-columns:repeat(4,1fr);margin:16px 0}.cols{grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr)}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}.hero{background:linear-gradient(135deg,#123822,#1f6f43);color:#fff;border-radius:18px;padding:22px}.hero p{color:#c9ddcf}.muted{color:var(--muted)}.metric{font-size:28px;font-weight:900}.btn{display:inline-block;border:0;border-radius:9px;padding:9px 12px;font-weight:800;cursor:pointer;text-decoration:none;background:var(--green);color:#fff}.btn.secondary{background:#eaf2ed;color:#17452d}.btn.outline{background:white;color:var(--ink);border:1px solid var(--line)}.btn.small{padding:6px 9px;font-size:12px}.select,.input{padding:9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}.tag{display:inline-block;background:#eef4f0;border-radius:999px;padding:5px 8px;font-size:11px;font-weight:750;margin:2px 4px 2px 0}.tag.good{background:#dff2e5;color:#175b35}.tag.warn{background:var(--warn);color:#855f14}.tag.blue{background:var(--blue);color:#315d8a}.callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0}.callout.warn{border-left-color:#c28a21;background:var(--warn)}.table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:9px 7px;border-bottom:1px solid var(--line);font-size:12px;vertical-align:top}.table th{font-size:10px;text-transform:uppercase;color:var(--muted)}.task{display:flex;justify-content:space-between;gap:12px;align-items:center;border-bottom:1px solid var(--line);padding:10px 0}.task:last-child{border-bottom:0}.field-row{display:grid;grid-template-columns:minmax(160px,1.3fr) 90px 110px 1.4fr auto;gap:10px;align-items:center;border-bottom:1px solid var(--line);padding:10px 0}.field-row:last-child{border-bottom:0}.statusline{font-size:11px}.modal{display:none;position:fixed;inset:0;background:rgba(7,21,14,.62);z-index:50;padding:40px;overflow:auto}.modal.open{display:block}.modal-card{width:min(1000px,96vw);margin:auto;background:#fff;border-radius:18px;padding:22px}.history-year{display:grid;grid-template-columns:70px 100px 110px 1.1fr 1fr;gap:10px;align-items:center;border-bottom:1px solid var(--line);padding:10px 0;font-size:12px}.workflow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;font-size:12px}.workflow a{color:#17452d;text-decoration:none;font-weight:750}.workflow .current{background:#eaf2ed;padding:5px 8px;border-radius:999px}.side-card{margin-top:24px;background:#173c29;border:1px solid #2a6041;border-radius:14px;padding:14px;font-size:12px;color:#cfe0d4;line-height:1.45}@media(max-width:1000px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.kpis,.cols{grid-template-columns:1fr}.main{padding:18px}.field-row{grid-template-columns:1fr}.history-year{grid-template-columns:1fr 1fr}.modal{padding:15px}}
+</style></head>
+<body><div class="app"><aside class="sidebar"><div class="brand">Seed<span>IQ</span></div><div class="subbrand">Seed Intelligence & Sales Platform</div><nav><a href="dealer-demo.html">Dashboard</a><a href="farmers.html" class="active">Farmer & Fields</a><a href="field-analysis.html">Field Analysis</a><a href="whole-farm-plan.html">Whole-Farm Plan</a><a href="genetics.html">Seed Genetics</a><a href="data-hub.html">Farm Data Hub</a></nav><div class="side-card"><b>Permanent Farm Record</b><br><br>This tab answers one question: what do we know about this farmer and every field they operate?</div></aside><main class="main"><div id="content"><div class="card">Loading farmer record…</div></div></main></div>
+<div id="historyModal" class="modal" onclick="if(event.target===this)closeHistory()"><div class="modal-card"><div class="row"><div><div class="muted" style="font-size:11px;font-weight:800">FIELD HISTORY</div><h2 id="historyTitle" style="margin:4px 0"></h2></div><button class="btn secondary" onclick="closeHistory()">Close</button></div><div id="historyBody"></div></div></div>
 <script>
-document.querySelectorAll('[data-print]').forEach(btn=>btn.addEventListener('click',()=>window.print()));
-
-</script>
-</body>
-</html>
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const qs=new URLSearchParams(location.search);let prospectId=Number(qs.get('id'))||null,year=Number(qs.get('year'))||2027;
+let prospects=[],prospect=null,fields=[],soil=[],plans=[],historyPlans={},profile={fields:[]};
+async function api(u,o={}){const r=await fetch(u,o);let d={};try{d=await r.json()}catch{}if(r.status===401){location='/login.html';throw new Error('Sign in required')}if(!r.ok)throw Error(d.detail||('HTTP '+r.status));return d}
+const fmt=(v,d=0)=>v==null?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
+function fieldProfile(fid){return (profile.fields||[]).find(x=>Number(x.field_id||x.id)===Number(fid))||{}}
+function soilFor(fid){return soil.find(x=>Number(x.field_id)===Number(fid))||{}}
+function planFor(fid,y=year){return (historyPlans[y]||plans).find(x=>Number(x.field_id)===Number(fid))||{}}
+function readiness(f){const s=soilFor(f.id),p=planFor(f.id),pf=fieldProfile(f.id),tags=[];tags.push(s.boundary_geojson?'<span class="tag good">Mapped</span>':'<span class="tag warn">Map needed</span>');tags.push(s.soil_status?'<span class="tag good">Soils</span>':'<span class="tag warn">Soils needed</span>');tags.push((pf.years||[]).length?'<span class="tag good">APH '+(pf.years||[]).length+' yrs</span>':'<span class="tag warn">APH needed</span>');tags.push(p.crop?'<span class="tag blue">'+esc(p.crop)+'</span>':'<span class="tag warn">'+year+' crop</span>');if(p.selected_seed_name)tags.push('<span class="tag good">Seed selected</span>');return tags.join('')}
+function tasks(){
+ const out=[];fields.forEach(f=>{const s=soilFor(f.id),p=planFor(f.id),pf=fieldProfile(f.id);if(!s.boundary_geojson)out.push({field:f,text:'Confirm exact field boundary',action:'/prospect-detail.html?id='+prospectId});else if(!s.soil_status)out.push({field:f,text:'Pull SSURGO soils',action:'/prospect-detail.html?id='+prospectId});if(!(pf.years||[]).length)out.push({field:f,text:'Attach/update APH history',action:'/prospect-detail.html?id='+prospectId});if(!p.crop)out.push({field:f,text:'Assign '+year+' crop',action:'/prospect-detail.html?id='+prospectId});if(p.crop&&!p.selected_seed_product_id)out.push({field:f,text:'Analyze and choose seed',action:'/field-analysis.html?id='+prospectId+'&field='+f.id+'&year='+year})});return out}
+function fieldRows(){return fields.map(f=>{const p=planFor(f.id),pf=fieldProfile(f.id);const aphYears=(pf.years||[]).length;return `<div class="field-row"><div><b>${esc(f.name)}</b><div class="muted" style="font-size:11px">${esc(f.county||'')} ${esc(f.state||'')}</div></div><div><b>${fmt(f.acres,1)}</b><div class="muted" style="font-size:10px">acres</div></div><div>${esc(p.irrigation||f.irrigation||'—')}</div><div class="statusline">${readiness(f)}</div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn small secondary" onclick="openHistory(${f.id})">History</button><a class="btn small secondary" href="/field-analysis.html?id=${prospectId}&field=${f.id}&year=${year}">Analyze</a><a class="btn small outline" href="/prospect-detail.html?id=${prospectId}">Edit</a></div></div>`}).join('')}
+function annualChangeSummary(){const current=historyPlans[year]||plans,prior=historyPlans[year-1]||[];let cropChanges=0,newSelections=0;fields.forEach(f=>{const a=current.find(x=>Number(x.field_id)===Number(f.id))||{},b=prior.find(x=>Number(x.field_id)===Number(f.id))||{};if(a.crop&&b.crop&&a.crop!==b.crop)cropChanges++;if(a.selected_seed_product_id&&!b.selected_seed_product_id)newSelections++});const aphReady=fields.filter(f=>(fieldProfile(f.id).years||[]).length).length;return {cropChanges,newSelections,aphReady}}
+function render(){const totalAc=fields.reduce((s,f)=>s+Number(f.acres||0),0),mapped=fields.filter(f=>soilFor(f.id).boundary_geojson).length,aphReady=fields.filter(f=>(fieldProfile(f.id).years||[]).length).length,t=tasks(),changes=annualChangeSummary(),farm=(prospect.farm_context||{}).farm||{},counties=[...new Set(fields.map(f=>f.county).filter(Boolean))];document.getElementById('content').innerHTML=`
+<div class="workflow"><a href="dealer-demo.html">Dashboard</a><span>›</span><span class="current">Farmer & Fields</span><span>›</span><span class="muted">Field Analysis</span><span>›</span><span class="muted">Whole-Farm Plan</span></div>
+<div class="row"><div><div class="muted" style="font-size:11px;font-weight:800">PERMANENT CUSTOMER RECORD</div><h1 style="margin:4px 0">${esc(prospect.prospect_name)}</h1><div class="muted">${esc(prospect.producer_name||'Producer')} • ${counties.map(esc).join(', ')||'Location pending'} • ${fmt(totalAc,0)} acres</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><select class="select" onchange="chooseProspect(this.value)">${prospects.map(p=>`<option value="${p.id}" ${Number(p.id)===Number(prospectId)?'selected':''}>${esc(p.prospect_name)}</option>`).join('')}</select><a class="btn secondary" href="/prospect-detail.html?id=${prospectId}">Manage Farm Data</a><a class="btn" href="/whole-farm-plan.html?id=${prospectId}&year=${year}">Build Farm Plan →</a></div></div>
+<div class="grid kpis"><div class="card"><div class="muted">Total Acres</div><div class="metric">${fmt(totalAc)}</div></div><div class="card"><div class="muted">Fields</div><div class="metric">${fields.length}</div></div><div class="card"><div class="muted">Mapped</div><div class="metric">${mapped}/${fields.length}</div></div><div class="card"><div class="muted">APH History Ready</div><div class="metric">${aphReady}/${fields.length}</div></div></div>
+<div class="hero"><div style="font-size:11px;font-weight:850;letter-spacing:.06em">BUILD ONCE → MAINTAIN WHAT CHANGES</div><h2 style="margin:6px 0">The permanent operating record for this farmer.</h2><p>Fields, identities, APH history, management and seed decisions stay with the farm. New ground gets added; existing ground keeps accumulating history.</p></div>
+<div class="grid cols" style="margin-top:16px">
+<div>
+<div class="card"><div class="row"><div><h2 style="margin:0">Field Inventory</h2><div class="muted" style="font-size:12px">Status and entry points — not another recommendation screen.</div></div><select class="select" onchange="year=Number(this.value);loadYear(year)">${[2026,2027,2028,2029].map(y=>`<option ${y===year?'selected':''}>${y}</option>`).join('')}</select></div><div style="margin-top:10px">${fieldRows()}</div></div>
+<div class="card" style="margin-top:16px"><div class="row"><div><h2 style="margin:0">Farm History Foundation</h2><div class="muted" style="font-size:12px">This is where SeedIQ's long-term advantage compounds.</div></div></div><div class="callout" style="margin-top:10px"><b>Today:</b> APH yield + weather history are attached to the permanent field record.</div><div class="callout" style="margin-top:8px"><b>Now building:</b> seed product selections are retained by planning year.</div><div class="callout" style="margin-top:8px"><b>Future intelligence:</b> compare hybrid/variety × realized yield × soil × weather × management on the same field over time.</div></div>
+</div>
+<div>
+<div class="card"><h2 style="margin-top:0">Needs Attention <span class="tag ${t.length?'warn':'good'}">${t.length}</span></h2>${t.length?t.slice(0,10).map(x=>`<div class="task"><div><b>${esc(x.field.name)}</b><div class="muted" style="font-size:11px">${esc(x.text)}</div></div><a class="btn small secondary" href="${x.action}">Fix →</a></div>`).join(''):'<div class="callout"><b>Farm record is caught up.</b><br>No obvious data or planning gaps for '+year+'.</div>'}${t.length>10?`<div class="muted" style="font-size:11px;margin-top:8px">+${t.length-10} more items</div>`:''}</div>
+<div class="card" style="margin-top:16px"><h2 style="margin-top:0">${year} Changes & Activity</h2><table class="table"><tr><td>Fields with APH history</td><td><b>${changes.aphReady}</b></td></tr><tr><td>Crop changes vs ${year-1}</td><td><b>${changes.cropChanges}</b></td></tr><tr><td>New seed selections vs ${year-1}</td><td><b>${changes.newSelections}</b></td></tr><tr><td>Farm tillage default</td><td><b>${esc(farm.default_tillage||'Not set')}</b></td></tr><tr><td>Row spacing default</td><td><b>${esc(farm.default_row_spacing||'Not set')}</b></td></tr><tr><td>Planting window</td><td><b>${esc(farm.default_planting_window||'Not set')}</b></td></tr></table></div>
+<div class="card" style="margin-top:16px"><h2 style="margin-top:0">Annual Maintenance</h2><div class="muted" style="font-size:12px;margin-bottom:10px">When the farmer grows, this is the workflow.</div><div class="callout"><b>New farm/field</b><br>Add or draw boundary → pull soils → identify unit → attach APH → caught up.</div><a class="btn secondary" style="margin-top:10px" href="/prospect-detail.html?id=${prospectId}">Add / Update Fields</a></div>
+</div></div>`}
+async function chooseProspect(v){location='/farmers.html?id='+Number(v)+'&year='+year}
+async function loadYear(y){year=y;if(!historyPlans[y]){const r=await api('/api/farms/'+prospect.farm_id+'/crop-plans?crop_year='+y);historyPlans[y]=r.fields||[]}plans=historyPlans[y];render()}
+function closeHistory(){document.getElementById('historyModal').classList.remove('open')}
+function openHistory(fid){const f=fields.find(x=>Number(x.id)===Number(fid)),pf=fieldProfile(fid),s=soilFor(fid),years=[...(pf.years||[])].sort((a,b)=>Number(b.crop_year)-Number(a.crop_year));document.getElementById('historyTitle').textContent=f.name+' — '+fmt(f.acres,1)+' acres';const planYears=Object.keys(historyPlans).map(Number).sort((a,b)=>b-a);const allYears=[...new Set([...years.map(x=>Number(x.crop_year)),...planYears])].sort((a,b)=>b-a);document.getElementById('historyBody').innerHTML=`<div class="grid kpis" style="grid-template-columns:repeat(4,1fr)"><div class="card"><div class="muted">Dominant Soil</div><b>${esc(s.dominant_muname||s.dominant_musym||'—')}</b></div><div class="card"><div class="muted">AWC</div><b>${s.weighted_aws150_cm!=null?Number(s.weighted_aws150_cm).toFixed(1)+' cm':'—'}</b></div><div class="card"><div class="muted">APH Years</div><b>${years.length}</b></div><div class="card"><div class="muted">Yield Stability</div><b>${pf.production_summary?.yield_stability_score!=null?pf.production_summary.yield_stability_score+'/100':'—'}</b></div></div><div class="card"><h3>Year-by-Year Record</h3><div class="history-year" style="font-weight:800;color:var(--muted)"><div>Year</div><div>Crop</div><div>Yield</div><div>SeedIQ Seed</div><div>Environment</div></div>${allYears.length?allYears.map(y=>{const ph=years.find(x=>Number(x.crop_year)===y)||{},pl=planFor(fid,y),env=ph.environment||{},m=env.metadata||{};return `<div class="history-year"><div><b>${y}</b></div><div>${esc(ph.crop||pl.crop||'—')}</div><div><b>${ph.yield_value!=null?Number(ph.yield_value).toFixed(1):'—'}</b></div><div>${esc(pl.selected_seed_name||'—')}</div><div class="muted">${env.precipitation_in!=null?Number(env.precipitation_in).toFixed(1)+' in rain':''}${m.jun_aug_precipitation_in!=null?' • '+Number(m.jun_aug_precipitation_in).toFixed(1)+' in Jun–Aug':''}${env.heat_days_95!=null?' • '+env.heat_days_95+' days ≥95°':''}</div></div>`}).join(''):'<div class="muted" style="padding:14px 0">No history attached yet.</div>'}</div><div class="callout" style="margin-top:14px"><b>Where this is going:</b> once realized yield is tied to the actual hybrid/variety planted, SeedIQ can learn which genetics consistently outperform on this field and similar fields — not just which product scored highest before planting.</div>`;document.getElementById('historyModal').classList.add('open')}
+async function boot(){prospects=await api('/api/prospects');if(!prospects.length)throw Error('No farmer records found');if(!prospectId)prospectId=Number(prospects[0].id);prospect=await api('/api/prospects/'+prospectId);fields=(prospect.farm_context||{}).fields||[];soil=(prospect.soil_status||{}).fields||[];const years=[year-1,year,year+1];const [prof,...yr]=await Promise.all([api('/api/farms/'+prospect.farm_id+'/production-profile').catch(()=>({fields:[]})),...years.map(y=>api('/api/farms/'+prospect.farm_id+'/crop-plans?crop_year='+y).catch(()=>({fields:[]}))) ]);profile=prof;years.forEach((y,i)=>historyPlans[y]=yr[i].fields||[]);plans=historyPlans[year]||[];render()}
+boot().catch(e=>document.getElementById('content').innerHTML='<div class="card"><b>Could not load Farmer & Fields.</b><br>'+esc(e.message)+'</div>');
+</script></body></html>

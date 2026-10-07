@@ -112,7 +112,7 @@ SOURCES = [
         "title": "Late Planted Corn Hybrid Decisions & Growing Degree Day Compression",
         "url": "https://ag.purdue.edu/news/department/agry/kernel-news/2026/04/late-planted-corn-hybrid-decisions-gdd.html",
         "principles": ["planting-date maturity adjustment", "GDD-based maturity risk"],
-    },,
+    },
     {
         "id": "penn-state-corn-selection",
         "organization": "Penn State Extension",

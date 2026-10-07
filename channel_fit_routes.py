@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from aph_utils import collapse_production_records, match_identity, record_identity
 from database import connect, rows_to_dicts
 from climate_service import current_enso_outlook
+from agronomy_rules import ENGINE_VERSION as AGRONOMY_ENGINE_VERSION, evaluate_agronomy, rules_catalog
 
 router = APIRouter()
 
@@ -600,10 +601,34 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             row.get("default_planting_window"),
         )
         aph_points, aph_reasons = _aph_production_fit(crop, meta, tags, production_context, row.get("climate_outlook"))
-        score = round(max(0, min(99, score + trait_points + management_points + aph_points)), 1)
-        reasons = aph_reasons + management_reasons + trait_reasons + reasons
+        legacy_score = round(max(0, min(99, score + trait_points + management_points + aph_points)), 1)
+
+        rule_meta = dict(meta)
+        rule_meta["_field_metadata"] = _loads(row.get("field_metadata_json"), {})
+        agronomy = evaluate_agronomy(
+            crop=crop,
+            irrigation=row.get("irrigation"),
+            awc=row.get("weighted_aws150_cm"),
+            slope=row.get("weighted_slope_pct"),
+            drainage=drainage,
+            tillage=row.get("default_tillage"),
+            row_spacing=row.get("default_row_spacing"),
+            planting_window=row.get("default_planting_window"),
+            yield_goal=row.get("yield_goal"),
+            production_context=production_context,
+            product=p,
+            product_meta=rule_meta,
+            chars=_characteristic_map(meta),
+            tags=tags,
+            maturity_window=maturity_window,
+        )
+        # Blend the proven SeedIQ fit model with the neutral agronomy rules
+        # layer. This avoids score inflation from simply stacking more bonuses.
+        score = round(max(0, min(99, legacy_score * 0.72 + float(agronomy["agronomy_score"]) * 0.28)), 1)
+        reasons = (agronomy.get("top_reasons") or []) + aph_reasons + management_reasons + trait_reasons + reasons
         if location_reason:
             reasons = [location_reason] + reasons
+
         pop = _population(
             crop,
             row.get("irrigation"),
@@ -611,6 +636,16 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             row.get("yield_goal"),
             tags,
         )
+        # Product-specific population response is valuable evidence. Blend the
+        # field recommendation toward the catalog target and respect min/max.
+        product_target = p.get("population_target")
+        if product_target:
+            pop = int(round((0.60 * pop + 0.40 * int(product_target)) / 500.0) * 500)
+        if p.get("population_min"):
+            pop = max(pop, int(p["population_min"]))
+        if p.get("population_max"):
+            pop = min(pop, int(p["population_max"]))
+
         ranked.append({
             "seed_product_id": p["id"],
             "product_name": p["product_name"],
@@ -622,13 +657,18 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             "bayer_trait_points": trait_points,
             "management_points": management_points,
             "aph_points": aph_points,
+            "agronomy_score": agronomy.get("agronomy_score"),
+            "agronomy_engine_version": agronomy.get("engine_version"),
+            "agronomy_rules_fired": agronomy.get("rules_fired", [])[:6],
+            "agronomy_warnings": agronomy.get("warnings", []),
+            "agronomy_source_ids": [s.get("id") for s in agronomy.get("sources", [])],
             "location_eligible": eligible,
             "location_reason": location_reason,
             "maturity_window": maturity_window,
             "recommended_population": pop,
             "unit_size_seeds": p.get("unit_size_seeds"),
             "placement": p.get("placement_text"),
-            "reasons": reasons[:6],
+            "reasons": reasons[:8],
             "source_url": p.get("source_url"),
         })
     ranked.sort(
@@ -641,6 +681,11 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
     )
     return ranked
 
+
+
+@router.get("/api/agronomy/rules")
+def agronomy_rules_catalog():
+    return rules_catalog()
 
 
 def _whole_farm_reason_summary(row: dict[str, Any], rec: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -695,6 +740,9 @@ def _whole_farm_reason_summary(row: dict[str, Any], rec: dict[str, Any], context
         "aph_points": rec.get("aph_points"),
         "management_points": rec.get("management_points"),
         "bayer_trait_points": rec.get("bayer_trait_points"),
+        "agronomy_score": rec.get("agronomy_score"),
+        "agronomy_engine_version": rec.get("agronomy_engine_version"),
+        "agronomy_rules_fired": rec.get("agronomy_rules_fired", []),
         "climate_history": {
             "el_nino_years": el_years,
             "el_nino_average_yield": el_avg,
@@ -717,7 +765,7 @@ def _whole_farm_reason_summary(row: dict[str, Any], rec: dict[str, Any], context
 def channel_plan_insights(farm_id: int, crop_year: int = 2027):
     with connect() as conn:
         rows = rows_to_dicts(conn.execute(
-            "SELECT f.id AS field_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,"
+            "SELECT f.id AS field_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,f.metadata_json AS field_metadata_json,"
             "cp.crop,cp.yield_goal,cp.selected_seed_product_id,"
             "fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,"
             "fl.centroid_lat,fl.centroid_lon,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window "
@@ -820,7 +868,7 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
 def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
     with connect() as conn:
         row = conn.execute(
-            "SELECT f.id,f.farm_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window,cp.crop,cp.yield_goal,cp.target_population,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.id=?",
+            "SELECT f.id,f.farm_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,f.metadata_json AS field_metadata_json,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window,cp.crop,cp.yield_goal,cp.target_population,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.id=?",
             (crop_year, field_id),
         ).fetchone()
         if not row:
@@ -858,7 +906,8 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
             },
             "aph_production_context": production_context,
         },
-        "ranking_method": "SeedIQ hard location/maturity gate first, then SSURGO soil + IRR/NIRR + Bayer agronomic ratings + farm management + matched APH/weather production history; no AI/model cost",
+        "ranking_method": f"SeedIQ hard location/maturity gate first, then blended field/product fit + neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}) + SSURGO + IRR/NIRR + product ratings + farm management + matched APH/weather history; deterministic, no AI/model cost",
+        "agronomy_engine": {"version": AGRONOMY_ENGINE_VERSION, "source_count": rules_catalog()["source_count"]},
         "population_note": "Population is a SeedIQ planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
         "catalog_product_count": len(ranked),
         "location_eligible_count": len(eligible_ranked),
@@ -874,7 +923,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
         if not farm:
             raise HTTPException(status_code=404, detail="Farm not found")
         rows = rows_to_dicts(conn.execute(
-            "SELECT f.id AS field_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,cp.id AS crop_plan_id,cp.crop,cp.yield_goal,cp.target_population,cp.selected_seed_product_id,cp.seed_price_per_unit,cp.seeds_per_unit,cp.pricing_source,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window "
+            "SELECT f.id AS field_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,f.metadata_json AS field_metadata_json,cp.id AS crop_plan_id,cp.crop,cp.yield_goal,cp.target_population,cp.selected_seed_product_id,cp.seed_price_per_unit,cp.seeds_per_unit,cp.pricing_source,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window "
             "FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.farm_id=? ORDER BY f.name",
             (req.crop_year, farm_id),
         ).fetchall())
@@ -975,5 +1024,5 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
         "skipped_no_products": skipped_no_products,
         "yield_goals_backfilled": yield_goals_backfilled,
         "assignments": assignments,
-        "method": "Hard field-location maturity gate first; then Channel fit using SSURGO, IRR/NIRR, Bayer ratings, farm management and matched APH/weather production history. Products outside the local maturity window stay in the catalog but cannot be auto-selected. APH influence is conservative and cannot override the location gate.",
+        "method": f"Hard field-location maturity gate first; then Channel fit blended with neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}), SSURGO, IRR/NIRR, product ratings, farm management and matched APH/weather history. Products outside the local maturity window cannot be auto-selected.",
     }

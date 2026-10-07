@@ -112,7 +112,49 @@ SOURCES = [
         "title": "Late Planted Corn Hybrid Decisions & Growing Degree Day Compression",
         "url": "https://ag.purdue.edu/news/department/agry/kernel-news/2026/04/late-planted-corn-hybrid-decisions-gdd.html",
         "principles": ["planting-date maturity adjustment", "GDD-based maturity risk"],
+    },,
+    {
+        "id": "penn-state-corn-selection",
+        "organization": "Penn State Extension",
+        "title": "Considerations for Selecting Corn Hybrids in Pennsylvania",
+        "url": "https://extension.psu.edu/considerations-for-selecting-corn-hybrids-in-pennsylvania",
+        "principles": ["profitability", "maturity adaptation", "disease-specific resistance", "standability", "multi-trial performance", "drydown"],
     },
+    {
+        "id": "sdsu-seed-selection",
+        "organization": "South Dakota State University Extension",
+        "title": "Using Data for Better Seed Selection",
+        "url": "https://extension.sdstate.edu/using-data-better-seed-selection",
+        "principles": ["multi-location consistency", "field disease history", "emergence and vigor", "lodging", "drydown", "trait necessity"],
+    },
+    {
+        "id": "sdsu-corn-population",
+        "organization": "South Dakota State University Extension",
+        "title": "Corn Planting Populations: A Deeper Dive",
+        "url": "https://extension.sdstate.edu/corn-planting-populations-deeper-dive",
+        "principles": ["rainfall and geography", "hybrid-specific population", "seed cost", "soil productivity", "yield potential", "economic optimum"],
+    },
+    {
+        "id": "illinois-corn-management",
+        "organization": "University of Illinois Extension",
+        "title": "Illinois Corn Management",
+        "url": "https://extension.illinois.edu/sites/default/files/2025-03/illinois-corn-management.pdf",
+        "principles": ["maturity", "yield potential", "standability", "disease and pest resistance", "multi-location consistency"],
+    },
+    {
+        "id": "msu-seed-selection",
+        "organization": "Michigan State University Extension",
+        "title": "Seed Selection: Beyond Yield and Disease Resistance",
+        "url": "https://www.canr.msu.edu/farm_management/uploads/files/Seed%20Selection%20Beyond%20Yield%20and%20Disease%20Resistance%20%28Corn%20Edition%29.pdf",
+        "principles": ["profitability", "adaptation to soil and management", "yield potential", "disease resistance", "local experience"],
+    },
+    {
+        "id": "science-for-success-soy",
+        "organization": "Science for Success / U.S. Extension soybean specialists",
+        "title": "Keys to Success: Choosing the Right Soybean Variety",
+        "url": "https://www.canr.msu.edu/agronomy/Extension/Science%20for%20Success-%20VarietySelection.pdf",
+        "principles": ["regional maturity adaptation", "genetic diversification", "field-specific stress avoidance", "profitability"],
+    }
 ]
 
 

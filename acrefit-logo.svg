@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 180" role="img" aria-labelledby="title desc">
+<title id="title">AcreFit logo</title><desc id="desc">AF monogram with stylized field rows and AcreFit wordmark</desc>
+<defs><linearGradient id="fitg" x1="0" x2="1"><stop offset="0" stop-color="#2E8B57"/><stop offset="1" stop-color="#2E7D32"/></linearGradient></defs>
+<g transform="translate(8,14)">
+<path d="M18 142 L79 22 Q85 10 98 10 L118 10 L174 142 L140 142 L121 101 L65 101 L44 142 Z" fill="#0F3D2E"/>
+<path d="M84 78 L102 42 L117 78 Z" fill="#ffffff"/>
+<path d="M43 140 C60 118 76 105 99 93" fill="none" stroke="#A7D56B" stroke-width="13" stroke-linecap="round"/>
+<path d="M63 140 C77 121 92 108 111 100" fill="none" stroke="#62B44B" stroke-width="11" stroke-linecap="round"/>
+<path d="M83 140 C95 124 107 113 121 107" fill="none" stroke="#2E8B57" stroke-width="10" stroke-linecap="round"/>
+<path d="M124 10 H206 L192 38 H137 Z" fill="#2E8B57"/>
+<path d="M139 61 H184 L172 88 H148 Z" fill="#1F6F43"/>
+</g>
+<text x="230" y="119" font-family="Arial, Helvetica, sans-serif" font-size="88" font-weight="700" letter-spacing="-3" fill="#0F3D2E">Acre</text>
+<text x="427" y="119" font-family="Arial, Helvetica, sans-serif" font-size="88" font-weight="700" letter-spacing="-3" fill="url(#fitg)">Fit</text>
+</svg>

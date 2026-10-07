@@ -153,6 +153,10 @@ def _build_field_book_data(token: str):
             "placement": row.get("placement_text"),
             "fit_score": fit_score,
             "reasons": reasons,
+            "agronomy_score": selected_fit.get("agronomy_score"),
+            "agronomy_engine_version": selected_fit.get("agronomy_engine_version"),
+            "agronomy_rules_fired": selected_fit.get("agronomy_rules_fired", []),
+            "agronomy_source_ids": selected_fit.get("agronomy_source_ids", []),
             "location_eligible": selected_fit.get("location_eligible"),
             "location_reason": selected_fit.get("location_reason"),
             "bayer_trait_points": selected_fit.get("bayer_trait_points"),
@@ -187,7 +191,7 @@ def _build_field_book_data(token: str):
         "planned_acres": round(sum(float(x.get("acres") or 0) for x in fields), 2),
         "estimated_seed_value": round(sum(float(x.get("total_seed_cost") or 0) for x in fields), 2),
         "climate_outlook": outlook,
-        "method": "SeedIQ full field-fit engine using location/maturity eligibility, SSURGO soil, IRR/NIRR, Bayer agronomic ratings, farm management defaults and yield environment.",
+        "method": "SeedIQ full field-fit engine using location/maturity eligibility, neutral land-grant Extension agronomy rules, SSURGO soil, IRR/NIRR, product agronomic ratings, farm management defaults and yield environment.",
         "population_note": "Planting populations are SeedIQ planning recommendations and should be confirmed by the dealer/agronomist for local conditions.",
     }
 

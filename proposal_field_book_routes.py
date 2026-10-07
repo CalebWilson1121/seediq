@@ -191,8 +191,8 @@ def _build_field_book_data(token: str):
         "planned_acres": round(sum(float(x.get("acres") or 0) for x in fields), 2),
         "estimated_seed_value": round(sum(float(x.get("total_seed_cost") or 0) for x in fields), 2),
         "climate_outlook": outlook,
-        "method": "SeedIQ full field-fit engine using location/maturity eligibility, neutral land-grant Extension agronomy rules, SSURGO soil, IRR/NIRR, product agronomic ratings, farm management defaults and yield environment.",
-        "population_note": "Planting populations are SeedIQ planning recommendations and should be confirmed by the dealer/agronomist for local conditions.",
+        "method": "AcreFit full field-fit engine using location/maturity eligibility, neutral land-grant Extension agronomy rules, SSURGO soil, IRR/NIRR, product agronomic ratings, farm management defaults and yield environment.",
+        "population_note": "Planting populations are AcreFit planning recommendations and should be confirmed by the dealer/agronomist for local conditions.",
     }
 
 

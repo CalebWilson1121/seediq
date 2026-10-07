@@ -91,7 +91,7 @@ def parse_nau_mapped_soi_pdf_with_agronomics(path: Path):
         classified += 1
 
     parsed.warnings.append(
-        f"SeedIQ retained IRR/NIRR agronomic classification for {classified}/{len(parsed.fields)} mapped fields; insurance financial/election data remains scrubbed."
+        f"AcreFit retained IRR/NIRR agronomic classification for {classified}/{len(parsed.fields)} mapped fields; insurance financial/election data remains scrubbed."
     )
     return parsed
 

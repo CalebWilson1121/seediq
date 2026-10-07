@@ -4,9 +4,9 @@ from typing import Any
 
 ENGINE_VERSION = "agronomy-rules-1.0.0"
 
-# SeedIQ uses these as neutral agronomy references. The summaries below are
+# AcreFit uses these as neutral agronomy references. The summaries below are
 # intentionally short principles, not copied extension text. Rules fire only
-# when SeedIQ has supporting field/product evidence.
+# when AcreFit has supporting field/product evidence.
 SOURCES = [
     {
         "id": "umn-corn-hybrid-selection",
@@ -311,7 +311,7 @@ def evaluate_agronomy(
                 "hybrid-population-response",
                 "Hybrid-specific population response",
                 2.0,
-                f"Product catalog target population is {int(pop_target):,}; SeedIQ should stay within the product response curve when field economics allow.",
+                f"Product catalog target population is {int(pop_target):,}; AcreFit should stay within the product response curve when field economics allow.",
                 ["unl-corn-seeding-rate", "ksu-corn-handbook"],
             ))
             score += 2.0

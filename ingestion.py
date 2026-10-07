@@ -97,10 +97,10 @@ def _insert_id(conn, sql: str, params: tuple) -> int:
 
 
 def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocument) -> int | None:
-    """APH, MBAR, or mapped SOI can create/enrich a SeedIQ prospect.
+    """APH, MBAR, or mapped SOI can create/enrich a AcreFit prospect.
 
     APH contributes production history. MBAR and mapped SOI contribute permanent field identity/geography.
-    Mapped SOI insurance values are intentionally not normalized into SeedIQ.
+    Mapped SOI insurance values are intentionally not normalized into AcreFit.
     """
     doc_type = (parsed.document_type or "").upper()
     if doc_type not in {"APH", "MBAR", "SOI"}:
@@ -267,7 +267,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
         (farm_id,),
     ).fetchall()]
     if not mapped_fields:
-        raise ValueError("Map the farm before uploading APH. SeedIQ will not create fields from APH.")
+        raise ValueError("Map the farm before uploading APH. AcreFit will not create fields from APH.")
     matches: dict[str, int] = {}
     units = 0
     for pf in parsed.fields:
@@ -378,7 +378,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
         confirmed_group_fields: list[int] = []
 
         # Preferred architecture: the mapped SOI is a separate identity/locator
-        # layer. It may identify the correct exact SeedIQ management fields, but
+        # layer. It may identify the correct exact AcreFit management fields, but
         # its rough PDF raster geometry never replaces those exact boundaries.
         if soi_crosswalk and soi_crosswalk.get("status") == "high" and soi_crosswalk.get("field_ids"):
             confirmed_group_fields = sorted({int(x) for x in soi_crosswalk["field_ids"]})

@@ -544,9 +544,9 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
     if not out.fields:
         out.warnings.append("Mapped SOI parser did not produce physical fields.")
     elif geometry_matches < len(out.fields):
-        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities; {geometry_matches} received raster-georeferenced reference shapes. Reference shapes are locators only and are not promoted to authoritative SeedIQ boundaries.")
+        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities; {geometry_matches} received raster-georeferenced reference shapes. Reference shapes are locators only and are not promoted to authoritative AcreFit boundaries.")
     else:
-        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes. SeedIQ requires exact MBAR/GIS or confirmed manual geometry before soil and production recommendations use a boundary.")
+        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes. AcreFit requires exact MBAR/GIS or confirmed manual geometry before soil and production recommendations use a boundary.")
     membership_fields = sum(1 for f in out.fields if (f.metadata or {}).get("insurance_unit_memberships"))
     out.warnings.append(f"Insurance financial/election data was intentionally excluded. Current unit membership was anchored from NAU Total Unit Summary for {membership_fields}/{len(out.fields)} physical fields and is retained only as an APH identity bridge.")
     return out

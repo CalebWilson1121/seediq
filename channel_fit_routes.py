@@ -622,7 +622,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             tags=tags,
             maturity_window=maturity_window,
         )
-        # Blend the proven SeedIQ fit model with the neutral agronomy rules
+        # Blend the proven AcreFit fit model with the neutral agronomy rules
         # layer. This avoids score inflation from simply stacking more bonuses.
         score = round(max(0, min(99, legacy_score * 0.72 + float(agronomy["agronomy_score"]) * 0.28)), 1)
         reasons = (agronomy.get("top_reasons") or []) + aph_reasons + management_reasons + trait_reasons + reasons
@@ -850,7 +850,7 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
                 climate_decision += (
                     f" By {summer.get('season') or 'early summer'}, NOAA shifts to "
                     f"{summer.get('neutral_pct')}% Neutral / {summer.get('el_nino_pct')}% El Nino, "
-                    "so SeedIQ does not treat the winter signal as a summer guarantee."
+                    "so AcreFit does not treat the winter signal as a summer guarantee."
                 )
         summary["climate_decision"] = climate_decision
         insights.append({
@@ -906,9 +906,9 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
             },
             "aph_production_context": production_context,
         },
-        "ranking_method": f"SeedIQ hard location/maturity gate first, then blended field/product fit + neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}) + SSURGO + IRR/NIRR + product ratings + farm management + matched APH/weather history; deterministic, no AI/model cost",
+        "ranking_method": f"AcreFit hard location/maturity gate first, then blended field/product fit + neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}) + SSURGO + IRR/NIRR + product ratings + farm management + matched APH/weather history; deterministic, no AI/model cost",
         "agronomy_engine": {"version": AGRONOMY_ENGINE_VERSION, "source_count": rules_catalog()["source_count"]},
-        "population_note": "Population is a SeedIQ planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
+        "population_note": "Population is a AcreFit planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
         "catalog_product_count": len(ranked),
         "location_eligible_count": len(eligible_ranked),
         "recommendations": eligible_ranked[:max(1, min(limit, 5))],

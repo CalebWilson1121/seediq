@@ -1,6 +1,6 @@
-# SeedIQ
+# AcreFit
 
-SeedIQ is a multi-page seed intelligence and sales prototype backed by a working **read once → normalize once → reuse everywhere** farm-data architecture.
+AcreFit is a multi-page seed intelligence and sales prototype backed by a working **read once → normalize once → reuse everywhere** farm-data architecture.
 
 ## Current connected stack
 
@@ -23,7 +23,7 @@ Farm Data Hub:
 ```text
 APH / MBAR / SOI
       ↓
-Upload to SeedIQ API
+Upload to AcreFit API
       ↓
 SHA-256 duplicate check
       ↓
@@ -54,7 +54,7 @@ Supabase migrations create:
 - `recommendations`
 - `ai_events`
 
-All application tables have RLS enabled. There are intentionally no browser-access policies yet; during development, data is accessed through the protected SeedIQ backend rather than directly from client-side JavaScript.
+All application tables have RLS enabled. There are intentionally no browser-access policies yet; during development, data is accessed through the protected AcreFit backend rather than directly from client-side JavaScript.
 
 ## Document ingestion
 
@@ -70,7 +70,7 @@ The repo contains sample APH / MBAR / SOI files. Production-grade carrier/AIP pa
 
 ### Read-once behavior
 
-Each uploaded document is SHA-256 hashed before parsing/storage. If the same file is uploaded again, SeedIQ returns the existing document/farm reference rather than rereading and duplicating it.
+Each uploaded document is SHA-256 hashed before parsing/storage. If the same file is uploaded again, AcreFit returns the existing document/farm reference rather than rereading and duplicating it.
 
 ## AI layer
 
@@ -102,7 +102,7 @@ Open:
 
 `http://127.0.0.1:8000/data-hub.html`
 
-When `POSTGRES_URL` is absent, SeedIQ automatically falls back to a local SQLite database for development.
+When `POSTGRES_URL` is absent, AcreFit automatically falls back to a local SQLite database for development.
 
 ## API endpoints
 
@@ -126,4 +126,4 @@ Supabase connection/storage variables are configured as Vercel environment varia
 3. NRCS soil enrichment by field polygon.
 4. Seed-company genetics import and normalization.
 5. Deterministic field-fit scoring and whole-farm portfolio optimization.
-6. SeedIQ user authentication and organization/role controls before external production use.
+6. AcreFit user authentication and organization/role controls before external production use.

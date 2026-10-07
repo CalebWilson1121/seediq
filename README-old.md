@@ -1,4 +1,4 @@
-# SeedIQ Multi-Page Prototype — Flat Self-Contained Repo
+# AcreFit Multi-Page Prototype — Flat Self-Contained Repo
 
 Upload all files in this folder directly to the root of your repository.
 

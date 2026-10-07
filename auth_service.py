@@ -24,7 +24,7 @@ def _token_hash(token: str) -> str:
 def _temporary_password() -> str:
     alphabet = string.ascii_letters + string.digits
     core = "".join(secrets.choice(alphabet) for _ in range(10))
-    return f"SeedIQ-{core}!"
+    return f"AcreFit-{core}!"
 
 
 def login(email: str, password: str) -> dict[str, Any]:
@@ -209,7 +209,7 @@ def create_dealer_user(organization_id: int, email: str, display_name: str, role
             raise KeyError("Dealer not found")
         existing = conn.execute("SELECT id FROM platform_users WHERE lower(email)=?", (email,)).fetchone()
         if existing:
-            raise ValueError("A SeedIQ user with that email already exists")
+            raise ValueError("A AcreFit user with that email already exists")
         seats = int(conn.execute("SELECT COUNT(*) AS n FROM platform_users WHERE organization_id=?", (organization_id,)).fetchone()["n"] or 0)
         if org["max_seats"] is not None and seats >= int(org["max_seats"]):
             raise ValueError("This dealer has reached its licensed seat limit")
@@ -254,7 +254,7 @@ def dealer_demo_dashboard(organization_id: int) -> dict[str, Any]:
         prospects = rows_to_dicts(conn.execute(
             "SELECT p.id,p.prospect_name,p.status,p.total_acres,p.metadata_json,f.id AS farm_id,f.producer_name "
             "FROM prospects p JOIN farms f ON f.id=p.farm_id WHERE p.organization_id=? "
-            "ORDER BY CASE WHEN p.prospect_name ILIKE '%SeedIQ Demo%' THEN 0 ELSE 1 END, p.updated_at DESC",
+            "ORDER BY CASE WHEN p.prospect_name ILIKE '%AcreFit Demo%' THEN 0 ELSE 1 END, p.updated_at DESC",
             (organization_id,),
         ).fetchall())
         stats = conn.execute(

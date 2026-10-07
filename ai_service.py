@@ -45,9 +45,9 @@ class OpenAIProvider(AIProvider):
 
     def generate(self, task_type: str, context: dict[str, Any], instruction: str) -> str:
         system = (
-            "You are SeedIQ's agronomic explanation layer. Use only the structured farm context supplied. "
+            "You are AcreFit's agronomic explanation layer. Use only the structured farm context supplied. "
             "Do not invent agronomic facts, yields, soil values, seed ratings, or insurance values. "
-            "Call out missing data explicitly. The deterministic SeedIQ engines remain the source of truth; "
+            "Call out missing data explicitly. The deterministic AcreFit engines remain the source of truth; "
             "your job is explanation, summarization, comparison, and sales-ready language."
         )
         response = self.client.responses.create(

@@ -34,7 +34,7 @@ def _html_text(value: str) -> str:
 def current_enso_outlook(crop_year: int | None = None) -> dict[str, Any]:
     """Fetch the current official NOAA CPC ENSO probabilities.
 
-    This is deliberately advisory context. SeedIQ never treats ENSO as a
+    This is deliberately advisory context. AcreFit never treats ENSO as a
     deterministic field-weather forecast; it uses the outlook to decide which
     parts of a field's own historical risk profile deserve more attention.
     """
@@ -376,7 +376,7 @@ def enrich_climate_for_fields(field_ids: list[int]) -> dict[str, Any]:
                     "roni_growing_season": roni_value,
                     "oni_growing_season": oni_value,
                     "enso_seasons_used": list(GROWING_SEASON_ENSO_SEASONS),
-                    "enso_phase_method": "SeedIQ crop-season phase from mean MJJ/JJA/JAS index; not NOAA official episode designation",
+                    "enso_phase_method": "AcreFit crop-season phase from mean MJJ/JJA/JAS index; not NOAA official episode designation",
                     "weather_error": weather_error,
                     "enso_error": enso_error,
                 }

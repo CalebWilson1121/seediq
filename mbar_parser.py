@@ -102,7 +102,7 @@ def parse_mbar_rows(rows: list[dict[str, Any]]) -> ParsedDocument:
     if not out.fields:
         out.warnings.append("No MBAR field rows were recognized. A carrier/export-specific mapping is needed for this form.")
     elif not any((f.metadata or {}).get("boundary_geojson") for f in out.fields):
-        out.warnings.append("Fields were recognized, but no exact GeoJSON boundaries were present in this export. SeedIQ can still retain field identity and later accept exact boundaries.")
+        out.warnings.append("Fields were recognized, but no exact GeoJSON boundaries were present in this export. AcreFit can still retain field identity and later accept exact boundaries.")
     return out
 
 

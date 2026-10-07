@@ -120,7 +120,7 @@ def _prepare_graphql_product(raw: dict[str, Any]) -> dict[str, Any]:
     row["titleSuffix"] = suffix or None
     return row
 HEADERS = {
-    "User-Agent": "SeedIQCatalogSync/1.0 (+https://seediq-w5-3abe.vercel.app)",
+    "User-Agent": "AcreFitCatalogSync/1.0 (+https://seediq-w5-3abe.vercel.app)",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
 }

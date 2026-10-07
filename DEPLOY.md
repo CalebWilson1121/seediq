@@ -1,4 +1,4 @@
-# SeedIQ deployment
+# AcreFit deployment
 
 ## Why a static host gives `405 Not Allowed`
 `data-hub.html` sends a `POST` request to `/api/documents/upload`. GitHub Pages and other static-only hosting serve files, but they do not run `server.py`, so they cannot accept that POST request.

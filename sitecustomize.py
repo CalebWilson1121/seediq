@@ -1,4 +1,4 @@
-"""SeedIQ runtime compatibility patches.
+"""AcreFit runtime compatibility patches.
 
 This module is imported automatically by CPython's site initialization.  Keep
 patches here small and explicit; move them into their owning modules during the

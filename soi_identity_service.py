@@ -51,7 +51,7 @@ def exact_root(value: Any) -> str:
 
 
 def store_soi_identities(conn, farm_id: int, document_id: int, parsed) -> int:
-    """Store mapped-SOI physical identities without creating duplicate SeedIQ fields."""
+    """Store mapped-SOI physical identities without creating duplicate AcreFit fields."""
     conn.execute("DELETE FROM soi_field_identities WHERE source_document_id=?", (document_id,))
     written = 0
     for i, field in enumerate(parsed.fields):
@@ -131,7 +131,7 @@ def _matching_membership(identity: dict[str, Any], unit_number: str, crop: str, 
 
 
 def suggest_exact_fields_for_aph(conn, farm_id: int, parsed_field) -> dict[str, Any] | None:
-    """Use mapped SOI only as identity/locator; exact SeedIQ geometries remain authoritative."""
+    """Use mapped SOI only as identity/locator; exact AcreFit geometries remain authoritative."""
     meta = parsed_field.metadata or {}
     unit_number = str(meta.get("unit") or parsed_field.field_number or parsed_field.name or "").strip()
     crop = str(parsed_field.crop or "").upper().strip()

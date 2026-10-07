@@ -154,7 +154,7 @@ def _aph_auto_suggestions(farm_id: int) -> dict[str, Any]:
                 "identity_aliases": soi.get("management_names") or [],
                 "crop": crop,
                 "practice": practice,
-                "reason": "Mapped SOI identity → exact SeedIQ field crosswalk"
+                "reason": "Mapped SOI identity → exact AcreFit field crosswalk"
                     + (f"; spatial overlap {float(soi.get('max_overlap_pct') or 0):.0f}%" if soi.get("max_overlap_pct") is not None else ""),
                 "source": "mapped_soi_crosswalk",
                 "has_reference_geometry": bool(soi.get("reference_geojson")),
@@ -803,5 +803,5 @@ def farm_production_profile(farm_id: int):
         },
         "fields": out_fields,
         "weather_source": "Open-Meteo ERA5 historical reanalysis, Apr 1–Oct 15",
-        "enso_source": "NOAA CPC RONI (primary) + ONI; SeedIQ crop-season phase uses mean MJJ/JJA/JAS",
+        "enso_source": "NOAA CPC RONI (primary) + ONI; AcreFit crop-season phase uses mean MJJ/JJA/JAS",
     }

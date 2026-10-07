@@ -24,7 +24,7 @@ from soil_service import enrich_field, enrich_prospect, prospect_soil_status
 
 BASE = Path(__file__).parent
 SESSION_COOKIE = "seediq_session"
-app = FastAPI(title="SeedIQ Seed Sales Platform", version="0.8.0")
+app = FastAPI(title="AcreFit Seed Sales Platform", version="0.8.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class LoginRequest(BaseModel):
@@ -85,7 +85,7 @@ def _database_status() -> str:
             conn.execute("SELECT 1").fetchone()
         return "connected"
     except Exception as exc:
-        print(f"SeedIQ database connection error: {type(exc).__name__}: {exc}", flush=True)
+        print(f"AcreFit database connection error: {type(exc).__name__}: {exc}", flush=True)
         return "error"
 
 def _user(request: Request):
@@ -97,7 +97,7 @@ def _require(request: Request, *roles: str):
     except PermissionError as exc:
         raise HTTPException(status_code=401 if str(exc) == "Login required" else 403, detail=str(exc)) from exc
 
-# Demo/production safety boundary. SeedIQ's app data is server-rendered through
+# Demo/production safety boundary. AcreFit's app data is server-rendered through
 # FastAPI/Postgres, so protect the application surface even where an individual
 # legacy route has not yet added a role decorator. Farmer proposal share links
 # remain intentionally public.
@@ -261,7 +261,7 @@ async def upload_document(file: Annotated[UploadFile, File(...)], document_type:
     try:
         return ingest_file(temp_path, file.filename or "upload.bin", document_type, reprocess=reprocess, target_farm_id=target_farm_id)
     except Exception as exc:
-        print(f"SeedIQ upload error: {type(exc).__name__}: {exc}", flush=True)
+        print(f"AcreFit upload error: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(status_code=400, detail=f"The document could not be imported: {str(exc)[:220]}") from exc
     finally:
         temp_path.unlink(missing_ok=True)
@@ -283,7 +283,7 @@ async def upload_seed_catalog(organization_id: int, file: Annotated[UploadFile, 
     try:
         return import_catalog(temp_path, file.filename or "catalog.bin", organization_id, crop_year, catalog_name, brand)
     except Exception as exc:
-        print(f"SeedIQ catalog upload error: {type(exc).__name__}: {exc}", flush=True)
+        print(f"AcreFit catalog upload error: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(status_code=400, detail=f"Seed catalog could not be imported: {str(exc)[:220]}") from exc
     finally:
         temp_path.unlink(missing_ok=True)

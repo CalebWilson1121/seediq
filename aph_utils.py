@@ -59,7 +59,7 @@ def record_identity(record: dict[str, Any]) -> str:
 def is_valid_production_record(record: dict[str, Any]) -> bool:
     """True only for real, usable APH production observations.
 
-    SeedIQ retains excluded/placeholder rows for auditability, but they must not
+    AcreFit retains excluded/placeholder rows for auditability, but they must not
     influence yield goals, stability, climate response, or seed placement.
     """
     try:

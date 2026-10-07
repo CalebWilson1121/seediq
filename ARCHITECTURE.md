@@ -1,4 +1,4 @@
-# SeedIQ Farm Data Engine — Architecture v0.1
+# AcreFit Farm Data Engine — Architecture v0.1
 
 ## Core rule
 
@@ -41,7 +41,7 @@ APH / MBAR / SOI / XLSX / CSV / PDF
  analytics          context only
         |             |
         +------v------+
-          SeedIQ apps
+          AcreFit apps
 ```
 
 ## Why this is cheaper

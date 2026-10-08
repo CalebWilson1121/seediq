@@ -817,5 +817,5 @@ def html_page(page_name: str):
 
 @app.api_route("/{asset_name}", methods=["GET", "HEAD"])
 def static_asset(asset_name: str):
-    if asset_name not in {"styles.css", "app.js", "acrefit-logo.svg", "acrefit-logo-light.svg", "acrefit-icon.svg"}: raise HTTPException(status_code=404)
+    if asset_name not in {"styles.css", "app.js", "activity.js", "acrefit-logo.svg", "acrefit-logo-light.svg", "acrefit-icon.svg"}: raise HTTPException(status_code=404)
     return FileResponse(BASE / asset_name)

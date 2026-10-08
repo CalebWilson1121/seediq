@@ -333,7 +333,7 @@ def update_dealer_team_user(organization_id: int, user_id: int, display_name: st
     return result
 
 
-def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, Any]:
+def dealer_salesperson_profile(organization_id: int, user_id: int, crop_year: int = 2027) -> dict[str, Any]:
     with connect() as conn:
         user = conn.execute(
             "SELECT id,email,display_name,global_role,status,organization_id,created_at,updated_at,last_login_at "
@@ -345,7 +345,8 @@ def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, 
 
         pipeline = rows_to_dicts(conn.execute(
             "SELECT status,COUNT(*) AS farms,COALESCE(SUM(total_acres),0) AS acres "
-            "FROM prospects WHERE organization_id=? AND assigned_salesperson_id=? GROUP BY status ORDER BY status",
+            "FROM prospects WHERE organization_id=? AND assigned_salesperson_id=? "
+            "GROUP BY status ORDER BY status",
             (organization_id, user_id),
         ).fetchall())
 
@@ -353,17 +354,19 @@ def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, 
             "SELECT p.id AS prospect_id,p.prospect_name,p.status,p.total_acres,p.updated_at,f.id AS farm_id,"
             "f.producer_name,f.county,f.state,"
             "(SELECT COUNT(*) FROM fields ff WHERE ff.farm_id=f.id) AS field_count,"
-            "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id WHERE ff.farm_id=f.id) AS seed_units,"
-            "(SELECT COUNT(*) FROM seed_proposals sp WHERE sp.prospect_id=p.id) AS proposal_count "
+            "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id "
+            " WHERE ff.farm_id=f.id AND cp.crop_year=?) AS seed_units,"
+            "(SELECT COUNT(*) FROM seed_proposals sp WHERE sp.prospect_id=p.id AND sp.crop_year=?) AS proposal_count "
             "FROM prospects p JOIN farms f ON f.id=p.farm_id "
             "WHERE p.organization_id=? AND p.assigned_salesperson_id=? ORDER BY p.updated_at DESC",
-            (organization_id, user_id),
+            (crop_year, crop_year, organization_id, user_id),
         ).fetchall())
 
         totals = conn.execute(
             "SELECT COUNT(*) AS farms,COALESCE(SUM(total_acres),0) AS acres,"
             "COALESCE(SUM(CASE WHEN lower(status)='won' THEN total_acres ELSE 0 END),0) AS won_acres,"
-            "COALESCE(SUM(CASE WHEN lower(status)='lost' THEN total_acres ELSE 0 END),0) AS lost_acres "
+            "COALESCE(SUM(CASE WHEN lower(status)='lost' THEN total_acres ELSE 0 END),0) AS lost_acres,"
+            "COALESCE(SUM(CASE WHEN lower(status) NOT IN ('won','lost') THEN total_acres ELSE 0 END),0) AS pipeline_acres "
             "FROM prospects WHERE organization_id=? AND assigned_salesperson_id=?",
             (organization_id, user_id),
         ).fetchone()
@@ -375,8 +378,8 @@ def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, 
             "COALESCE(SUM(cp.total_seed_cost),0) AS seed_value,"
             "COUNT(DISTINCT CASE WHEN cp.selected_seed_product_id IS NOT NULL THEN cp.field_id END) AS fields_with_seed "
             "FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id "
-            "WHERE fa.organization_id=? AND fa.assigned_salesperson_id=?",
-            (organization_id, user_id),
+            "WHERE fa.organization_id=? AND fa.assigned_salesperson_id=? AND cp.crop_year=?",
+            (organization_id, user_id, crop_year),
         ).fetchone()
 
         proposals = conn.execute(
@@ -384,16 +387,16 @@ def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, 
             "COUNT(*) FILTER (WHERE status IN ('ready','sent','viewed')) AS active,"
             "COUNT(*) FILTER (WHERE status='approved') AS approved "
             "FROM seed_proposals sp JOIN prospects p ON p.id=sp.prospect_id "
-            "WHERE p.organization_id=? AND p.assigned_salesperson_id=?",
-            (organization_id, user_id),
+            "WHERE p.organization_id=? AND p.assigned_salesperson_id=? AND sp.crop_year=?",
+            (organization_id, user_id, crop_year),
         ).fetchone()
 
         won_units = conn.execute(
             "SELECT COALESCE(SUM(cp.units_required),0) AS units "
             "FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id "
             "JOIN prospects p ON p.farm_id=fa.id "
-            "WHERE p.organization_id=? AND p.assigned_salesperson_id=? AND lower(p.status)='won'",
-            (organization_id, user_id),
+            "WHERE p.organization_id=? AND p.assigned_salesperson_id=? AND lower(p.status)='won' AND cp.crop_year=?",
+            (organization_id, user_id, crop_year),
         ).fetchone()
 
         activity = conn.execute(
@@ -412,8 +415,10 @@ def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, 
 
     u = dict(user)
     u["role"] = "dealer_admin" if u["global_role"] == "dealer_admin" else "salesperson"
+    u["can_sell"] = u["global_role"] in ("dealer_admin", "dealer_user")
     return {
         "user": u,
+        "crop_year": crop_year,
         "totals": dict(totals),
         "seed": {**dict(seed), "won_units": float(won_units["units"] or 0)},
         "proposals": dict(proposals),
@@ -425,16 +430,21 @@ def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, 
     }
 
 
-def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None = None) -> dict[str, Any]:
+def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None = None, crop_year: int = 2027) -> dict[str, Any]:
     with connect() as conn:
-        org = conn.execute("SELECT id,name,status,access_enabled,license_end,max_seats FROM dealer_organizations WHERE id=?", (organization_id,)).fetchone()
+        org = conn.execute(
+            "SELECT id,name,status,access_enabled,license_end,max_seats FROM dealer_organizations WHERE id=?",
+            (organization_id,),
+        ).fetchone()
         if not org:
             raise KeyError("Dealer not found")
+
         where_sql = "p.organization_id=?"
         params: tuple[Any, ...] = (organization_id,)
         if salesperson_user_id is not None:
             where_sql += " AND p.assigned_salesperson_id=?"
             params = (organization_id, salesperson_user_id)
+
         prospects = rows_to_dicts(conn.execute(
             "SELECT p.id,p.prospect_name,p.status,p.total_acres,p.metadata_json,p.assigned_salesperson_id,"
             "f.id AS farm_id,f.producer_name,u.display_name AS assigned_salesperson_name "
@@ -443,12 +453,80 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
             "ORDER BY CASE WHEN position(lower(?) in lower(p.prospect_name)) > 0 THEN 0 ELSE 1 END, p.updated_at DESC",
             (*params, "AcreFit Demo"),
         ).fetchall())
-        stats = conn.execute(
-            "SELECT COUNT(*) AS prospects,COALESCE(SUM(total_acres),0) AS acres FROM prospects p WHERE " + where_sql,
+
+        base_stats = conn.execute(
+            "SELECT COUNT(*) AS prospects,COALESCE(SUM(total_acres),0) AS acres,"
+            "COALESCE(SUM(CASE WHEN lower(status) NOT IN ('won','lost') THEN total_acres ELSE 0 END),0) AS pipeline_acres,"
+            "COUNT(*) FILTER (WHERE lower(status)='won') AS won_farms,"
+            "COALESCE(SUM(CASE WHEN lower(status)='won' THEN total_acres ELSE 0 END),0) AS won_acres "
+            "FROM prospects p WHERE " + where_sql,
             params,
         ).fetchone()
-        catalog = conn.execute(
-            "SELECT id,crop_year,catalog_name,status,product_count FROM seed_catalogs WHERE organization_id=? ORDER BY crop_year DESC,created_at DESC LIMIT 1",
+
+        acreage = conn.execute(
+            "SELECT COALESCE(SUM(f.acres),0) AS acres_under_acrefit "
+            "FROM fields f JOIN farms fa ON fa.id=f.farm_id WHERE fa.organization_id=?",
             (organization_id,),
         ).fetchone()
-    return {"dealer": dict(org), "stats": dict(stats), "prospects": prospects, "latest_catalog": dict(catalog) if catalog else None}
+
+        seed_stats = conn.execute(
+            "SELECT COALESCE(SUM(cp.units_required),0) AS seed_units_planned,"
+            "COALESCE(SUM(cp.total_seed_cost),0) AS estimated_seed_value,"
+            "COUNT(DISTINCT CASE WHEN cp.selected_seed_product_id IS NOT NULL THEN cp.field_id END) AS planned_fields "
+            "FROM field_crop_plans cp JOIN fields f ON f.id=cp.field_id JOIN farms fa ON fa.id=f.farm_id "
+            "WHERE fa.organization_id=? AND cp.crop_year=?",
+            (organization_id, crop_year),
+        ).fetchone()
+
+        won_seed = conn.execute(
+            "SELECT COALESCE(SUM(cp.units_required),0) AS won_units "
+            "FROM field_crop_plans cp JOIN fields f ON f.id=cp.field_id JOIN farms fa ON fa.id=f.farm_id "
+            "JOIN prospects p ON p.farm_id=fa.id "
+            "WHERE p.organization_id=? AND lower(p.status)='won' AND cp.crop_year=?",
+            (organization_id, crop_year),
+        ).fetchone()
+
+        proposal_stats = conn.execute(
+            "SELECT COUNT(*) AS proposals,"
+            "COUNT(*) FILTER (WHERE sp.status IN ('ready','sent','viewed')) AS proposals_out,"
+            "COUNT(*) FILTER (WHERE sp.status='approved') AS approved_proposals "
+            "FROM seed_proposals sp JOIN prospects p ON p.id=sp.prospect_id "
+            "WHERE p.organization_id=? AND sp.crop_year=?",
+            (organization_id, crop_year),
+        ).fetchone()
+
+        team = rows_to_dicts(conn.execute(
+            "SELECT u.id,u.display_name,u.email,u.global_role,u.status,u.last_login_at,"
+            "CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END AS role,"
+            "(SELECT COUNT(*) FROM prospects p WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id) AS farms,"
+            "(SELECT COALESCE(SUM(p.total_acres),0) FROM prospects p WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id) AS acres,"
+            "(SELECT COALESCE(SUM(p.total_acres),0) FROM prospects p WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id AND lower(p.status) NOT IN ('won','lost')) AS pipeline_acres,"
+            "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id WHERE fa.organization_id=? AND fa.assigned_salesperson_id=u.id AND cp.crop_year=?) AS seed_units,"
+            "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id JOIN prospects p ON p.farm_id=fa.id WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id AND lower(p.status)='won' AND cp.crop_year=?) AS won_units,"
+            "(SELECT COUNT(*) FROM seed_proposals sp JOIN prospects p ON p.id=sp.prospect_id WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id AND sp.crop_year=?) AS proposals,"
+            "(SELECT COALESCE(SUM(s.active_seconds),0) FROM user_activity_sessions s WHERE s.user_id=u.id) AS active_seconds "
+            "FROM platform_users u WHERE u.organization_id=? AND u.status='active' "
+            "ORDER BY CASE WHEN u.global_role='dealer_admin' THEN 0 ELSE 1 END,u.display_name",
+            (organization_id, organization_id, organization_id, organization_id, crop_year, organization_id, crop_year, organization_id, crop_year, organization_id),
+        ).fetchall())
+
+        catalog = conn.execute(
+            "SELECT id,crop_year,catalog_name,status,product_count FROM seed_catalogs "
+            "WHERE organization_id=? ORDER BY crop_year DESC,created_at DESC LIMIT 1",
+            (organization_id,),
+        ).fetchone()
+
+    stats = dict(base_stats)
+    stats.update(dict(acreage))
+    stats.update(dict(seed_stats))
+    stats.update(dict(won_seed))
+    stats.update(dict(proposal_stats))
+    stats["active_salespeople"] = len([x for x in team if x["global_role"] in ("dealer_admin", "dealer_user") and x["status"] == "active"])
+    return {
+        "dealer": dict(org),
+        "crop_year": crop_year,
+        "stats": stats,
+        "prospects": prospects,
+        "team": team,
+        "latest_catalog": dict(catalog) if catalog else None,
+    }

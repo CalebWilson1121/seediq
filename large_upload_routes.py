@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from auth_service import current_user, require_role
+from database import connect
 from storage_upload import create_signed_upload, ingest_signed_upload
 
 router = APIRouter()
@@ -31,6 +32,24 @@ def _require_dealer(request: Request):
         raise HTTPException(status_code=401 if str(exc) == "Login required" else 403, detail=str(exc)) from exc
 
 
+def _new_upload_ownership(user: dict) -> tuple[int, int, int]:
+    if user.get("global_role") == "super_admin":
+        return 1, int(user["id"]), int(user["id"])
+    organization_id = int(user.get("organization_id") or 0)
+    if not organization_id:
+        raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
+    if user.get("global_role") == "dealer_user":
+        return organization_id, int(user["id"]), int(user["id"])
+    with connect() as conn:
+        salesperson = conn.execute(
+            "SELECT id FROM platform_users WHERE organization_id=? AND global_role='dealer_user' AND status='active' ORDER BY id LIMIT 1",
+            (organization_id,),
+        ).fetchone()
+    if not salesperson:
+        raise HTTPException(status_code=400, detail="Add an active salesperson before uploading a new farm")
+    return organization_id, int(salesperson["id"]), int(user["id"])
+
+
 @router.post("/api/uploads/sign")
 def sign_large_upload(req: SignedUploadRequest, request: Request):
     _require_dealer(request)
@@ -42,19 +61,23 @@ def sign_large_upload(req: SignedUploadRequest, request: Request):
 
 @router.post("/api/uploads/process")
 def process_large_upload(req: ProcessUploadRequest, request: Request):
-    _require_dealer(request)
+    user = _require_dealer(request)
     try:
         # During parser development, re-uploading the same mapped SOI must rebuild
         # normalized fields/geometry rather than short-circuiting as a duplicate.
         # Auto-detect uploads often arrive with document_type=None, so the filename
         # is also used to recognize the mapped SOI source.
         is_soi = (req.document_type or "").upper() == "SOI" or "SOI" in req.original_name.upper()
+        ownership = (None, None, None) if req.target_farm_id is not None else _new_upload_ownership(user)
         return ingest_signed_upload(
             req.object_path,
             req.original_name,
             req.document_type,
             target_farm_id=req.target_farm_id,
             reprocess=(req.reprocess or is_soi),
+            organization_id=ownership[0],
+            assigned_salesperson_id=ownership[1],
+            created_by_user_id=ownership[2],
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"The uploaded document could not be imported: {str(exc)[:220]}") from exc

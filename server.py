@@ -128,31 +128,58 @@ def _resolve_salesperson(conn, user: dict, organization_id: int, requested_id: i
         ).fetchone()
         if not target or target["status"] != "active":
             raise HTTPException(status_code=400, detail="Assigned salesperson is unavailable")
-        if target["global_role"] != "dealer_user":
-            raise HTTPException(status_code=400, detail="Assigned user must be a salesperson")
+        if target["global_role"] not in ("dealer_user", "dealer_admin"):
+            raise HTTPException(status_code=400, detail="Assigned user must be a dealer salesperson or dealer admin")
         if int(target["organization_id"] or 0) != int(organization_id):
             raise HTTPException(status_code=403, detail="Assigned salesperson must belong to the same dealership")
         return int(target["id"])
     if role == "dealer_admin":
+        return int(user["id"])
+    if role == "super_admin":
         target = conn.execute(
-            "SELECT id FROM platform_users WHERE organization_id=? AND global_role='dealer_user' AND status='active' ORDER BY id LIMIT 1",
+            "SELECT id FROM platform_users WHERE organization_id=? AND status='active' AND global_role IN ('dealer_admin','dealer_user') "
+            "ORDER BY CASE WHEN global_role='dealer_admin' THEN 0 ELSE 1 END,id LIMIT 1",
             (organization_id,),
         ).fetchone()
         if not target:
-            raise HTTPException(status_code=400, detail="Add an active salesperson before creating a prospect")
+            raise HTTPException(status_code=400, detail="This dealership has no active seller to own the prospect")
         return int(target["id"])
     return int(user["id"])
 
 
-def _prospect_scope(user: dict) -> tuple[str, tuple]:
+def _dealer_org_for_user(user: dict, requested_organization_id: int | None = None) -> int:
     role = _role(user)
     if role == "super_admin":
+        if requested_organization_id is None:
+            raise HTTPException(status_code=400, detail="Select a dealer organization")
+        return int(requested_organization_id)
+    organization_id = user.get("organization_id")
+    if organization_id is None:
+        raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
+    if requested_organization_id is not None and int(requested_organization_id) != int(organization_id):
+        raise HTTPException(status_code=403, detail="You can only access your own dealership")
+    return int(organization_id)
+
+
+def _catalog_org(conn, catalog_id: int) -> int:
+    row = conn.execute("SELECT organization_id FROM seed_catalogs WHERE id=?", (catalog_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Catalog not found")
+    return int(row["organization_id"])
+
+
+def _prospect_scope(user: dict, scope: str | None = None) -> tuple[str, tuple]:
+    role = _role(user)
+    if role == "super_admin":
+        if scope == "mine":
+            return " WHERE p.assigned_salesperson_id=?", (int(user["id"]),)
         return "", ()
     if user.get("organization_id") is None:
         raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
-    if role == "dealer_admin":
-        return " WHERE p.organization_id=?", (int(user["organization_id"]),)
-    return " WHERE p.organization_id=? AND p.assigned_salesperson_id=?", (int(user["organization_id"]), int(user["id"]))
+    organization_id = int(user["organization_id"])
+    if role == "dealer_admin" and scope != "mine":
+        return " WHERE p.organization_id=?", (organization_id,)
+    return " WHERE p.organization_id=? AND p.assigned_salesperson_id=?", (organization_id, int(user["id"]))
 
 
 def _require_prospect_access(conn, prospect_id: int, user: dict):
@@ -368,20 +395,18 @@ def admin_user_access(user_id: int, req: AccessRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/api/dealer/dashboard")
-def dealer_dashboard(request: Request):
-    user = _require(request, "dealer_admin", "dealer_user")
-    if user.get("organization_id") is None:
-        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+def dealer_dashboard(request: Request, crop_year: int = 2027, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin", "dealer_user")
+    org_id = _dealer_org_for_user(user, organization_id)
     salesperson_user_id = int(user["id"]) if _role(user) == "salesperson" else None
-    return dealer_demo_dashboard(int(user["organization_id"]), salesperson_user_id)
+    return dealer_demo_dashboard(org_id, salesperson_user_id, crop_year)
 
 @app.get("/api/dealer/team")
-def get_dealer_team(request: Request):
-    user = _require(request, "dealer_admin")
-    if user.get("organization_id") is None:
-        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+def get_dealer_team(request: Request, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
     try:
-        return dealer_team(int(user["organization_id"]))
+        return dealer_team(org_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -422,12 +447,11 @@ def dealer_team_reset_password(user_id: int, request: Request):
 
 
 @app.get("/api/dealer/team/{user_id}/profile")
-def dealer_team_profile(user_id: int, request: Request):
-    user = _require(request, "dealer_admin")
-    if user.get("organization_id") is None:
-        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+def dealer_team_profile(user_id: int, request: Request, crop_year: int = 2027, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
     try:
-        return dealer_salesperson_profile(int(user["organization_id"]), user_id)
+        return dealer_salesperson_profile(org_id, user_id, crop_year)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -517,15 +541,27 @@ async def upload_document(file: Annotated[UploadFile, File(...)], request: Reque
         temp_path.unlink(missing_ok=True)
 
 @app.get("/api/dealers")
-def dealers():
-    return list_organizations()
+def dealers(request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    if _role(user) == "super_admin":
+        return list_organizations()
+    org_id = _dealer_org_for_user(user)
+    return [x for x in list_organizations() if int(x["id"]) == org_id]
 
 @app.get("/api/dealers/{organization_id}/catalogs")
-def dealer_catalogs(organization_id: int):
+def dealer_catalogs(organization_id: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    _dealer_org_for_user(user, organization_id)
     return list_catalogs(organization_id)
 
 @app.post("/api/dealers/{organization_id}/catalogs/upload")
-async def upload_seed_catalog(organization_id: int, file: Annotated[UploadFile, File(...)], crop_year: Annotated[int, Form()], catalog_name: Annotated[str, Form()], brand: Annotated[str | None, Form()] = None):
+async def upload_seed_catalog(organization_id: int, request: Request, file: Annotated[UploadFile, File(...)], crop_year: Annotated[int, Form()], catalog_name: Annotated[str, Form()], brand: Annotated[str | None, Form()] = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    _dealer_org_for_user(user, organization_id)
     suffix = Path(file.filename or "catalog.bin").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp" if os.path.isdir("/tmp") else None) as tmp:
         tmp.write(await file.read())
@@ -539,11 +575,21 @@ async def upload_seed_catalog(organization_id: int, file: Annotated[UploadFile, 
         temp_path.unlink(missing_ok=True)
 
 @app.get("/api/catalogs/{catalog_id}/products")
-def catalog_products(catalog_id: int):
+def catalog_products(catalog_id: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    with connect() as conn:
+        org_id = _catalog_org(conn, catalog_id)
+    _dealer_org_for_user(user, org_id)
     return list_products(catalog_id)
 
 @app.post("/api/catalogs/{catalog_id}/publish")
-def catalog_publish(catalog_id: int):
+def catalog_publish(catalog_id: int, request: Request):
+    user = _require(request, "super_admin", "dealer_admin")
+    with connect() as conn:
+        org_id = _catalog_org(conn, catalog_id)
+    _dealer_org_for_user(user, org_id)
     try:
         return publish_catalog(catalog_id)
     except (KeyError, ValueError) as exc:
@@ -706,12 +752,12 @@ def create_prospect(req: ProspectCreateRequest, request: Request):
 
 
 @app.get("/api/prospects")
-def list_prospects(request: Request):
+def list_prospects(request: Request, scope: str | None = None):
     user = _user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Login required")
     try:
-        where_sql, params = _prospect_scope(user)
+        where_sql, params = _prospect_scope(user, scope)
         with connect() as conn:
             rows = conn.execute(
                 "SELECT p.*, f.producer_name, f.farm_name, "

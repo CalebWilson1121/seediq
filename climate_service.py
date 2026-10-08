@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from html import unescape
+import json
 import re
 from statistics import mean
 from typing import Any
@@ -25,6 +26,36 @@ GROWING_SEASON_ENSO_SEASONS = ("MJJ", "JJA", "JAS")
 
 
 
+def _cache_get(cache_key: str) -> dict[str, Any] | None:
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT payload_json FROM external_data_cache WHERE cache_key=? AND expires_at>CURRENT_TIMESTAMP",
+                (cache_key,),
+            ).fetchone()
+        if not row:
+            return None
+        value = row.get("payload_json")
+        if isinstance(value, dict):
+            return value
+        return json.loads(value or "{}")
+    except Exception:
+        return None
+
+
+def _cache_set(cache_key: str, payload: dict[str, Any], hours: int) -> None:
+    try:
+        expires = datetime.now(timezone.utc) + timedelta(hours=hours)
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO external_data_cache(cache_key,payload_json,expires_at,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) "
+                "ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json,expires_at=excluded.expires_at,updated_at=CURRENT_TIMESTAMP",
+                (cache_key, json_dumps(payload), expires),
+            )
+    except Exception:
+        pass
+
+
 def _html_text(value: str) -> str:
     value = re.sub(r"(?is)<script.*?</script>|<style.*?</style>", " ", value or "")
     value = re.sub(r"(?s)<[^>]+>", " ", value)
@@ -32,12 +63,13 @@ def _html_text(value: str) -> str:
 
 
 def current_enso_outlook(crop_year: int | None = None) -> dict[str, Any]:
-    """Fetch the current official NOAA CPC ENSO probabilities.
-
-    This is deliberately advisory context. AcreFit never treats ENSO as a
-    deterministic field-weather forecast; it uses the outlook to decide which
-    parts of a field's own historical risk profile deserve more attention.
-    """
+    """Fetch the current official NOAA CPC ENSO probabilities with shared caching."""
+    cached = _cache_get("noaa:enso:current-outlook:v1")
+    if cached:
+        cached = dict(cached)
+        cached["crop_year"] = crop_year
+        cached["cache"] = "shared"
+        return cached
     try:
         with httpx.Client(timeout=16.0, follow_redirects=True) as client:
             probs_r = client.get(NOAA_ENSO_PROBABILITIES)
@@ -104,7 +136,7 @@ def current_enso_outlook(crop_year: int | None = None) -> dict[str, Any]:
         early_summer_season = "AMJ" if "AMJ" in table else ("MJJ" if "MJJ" in table else "JJA" if "JJA" in table else None)
         winter_season = "DJF" if "DJF" in table else ("NDJ" if "NDJ" in table else "JFM" if "JFM" in table else None)
 
-        return {
+        payload = {
             "status": status,
             "issued": issued,
             "synopsis": synopsis,
@@ -112,11 +144,12 @@ def current_enso_outlook(crop_year: int | None = None) -> dict[str, Any]:
             "winter": {"season": winter_season, **(winter or {})} if winter else None,
             "planting": {"season": planting_season, **(planting or {})} if planting else None,
             "early_summer": {"season": early_summer_season, **(early_summer or {})} if early_summer else None,
-            "crop_year": crop_year,
             "source": "NOAA Climate Prediction Center RONI probabilities",
             "source_url": NOAA_ENSO_PROBABILITIES,
             "interpretation_note": "ENSO shifts seasonal odds; it does not predict rainfall or yield for an individual field.",
         }
+        _cache_set("noaa:enso:current-outlook:v1", payload, 12)
+        return {**payload, "crop_year": crop_year, "cache": "fresh"}
     except Exception as exc:
         return {
             "status": None,
@@ -149,13 +182,20 @@ def _parse_noaa_index(text: str, value_column: int) -> dict[int, dict[str, float
 
 
 def _fetch_enso_tables() -> tuple[dict[int, dict[str, float]], dict[int, dict[str, float]]]:
+    cached = _cache_get("noaa:enso:index-tables:v1")
+    if cached and cached.get("roni") and cached.get("oni"):
+        roni = {int(y): vals for y, vals in cached["roni"].items()}
+        oni = {int(y): vals for y, vals in cached["oni"].items()}
+        return roni, oni
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         roni_r = client.get(NOAA_RONI)
         roni_r.raise_for_status()
         oni_r = client.get(NOAA_ONI)
         oni_r.raise_for_status()
-    # RONI: SEAS YR ANOM. ONI: SEAS YR TOTAL ANOM.
-    return _parse_noaa_index(roni_r.text, 2), _parse_noaa_index(oni_r.text, 3)
+    roni = _parse_noaa_index(roni_r.text, 2)
+    oni = _parse_noaa_index(oni_r.text, 3)
+    _cache_set("noaa:enso:index-tables:v1", {"roni": roni, "oni": oni}, 24)
+    return roni, oni
 
 
 def _season_average(table: dict[int, dict[str, float]], year: int) -> float | None:

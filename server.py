@@ -436,12 +436,11 @@ def dealer_team_user_access(user_id: int, req: AccessRequest, request: Request):
 
 
 @app.post("/api/dealer/team/{user_id}/reset-password")
-def dealer_team_reset_password(user_id: int, request: Request):
-    user = _require(request, "dealer_admin")
-    if user.get("organization_id") is None:
-        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+def dealer_team_reset_password(user_id: int, request: Request, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
     try:
-        return reset_dealer_team_user_password(int(user["organization_id"]), user_id, int(user["id"]))
+        return reset_dealer_team_user_password(org_id, user_id, int(user["id"]))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -456,12 +455,11 @@ def dealer_team_profile(user_id: int, request: Request, crop_year: int = 2027, o
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.put("/api/dealer/team/{user_id}/profile")
-def dealer_team_profile_update(user_id: int, req: TeamUserUpdateRequest, request: Request):
-    user = _require(request, "dealer_admin")
-    if user.get("organization_id") is None:
-        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+def dealer_team_profile_update(user_id: int, req: TeamUserUpdateRequest, request: Request, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
     try:
-        return update_dealer_team_user(int(user["organization_id"]), user_id, req.display_name, req.email, int(user["id"]))
+        return update_dealer_team_user(org_id, user_id, req.display_name, req.email, int(user["id"]))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

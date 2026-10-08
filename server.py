@@ -20,7 +20,7 @@ from context_builder import build_farm_context
 from crop_plan_service import apply_soi_crop_rotation, list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
 from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
 from ingestion import ingest_file
-from pricing_service import calculated_farmer_price, create_price_override, get_farmer_profile, import_price_sheet, latest_field_price_request, list_dealer_prices, list_price_requests, review_price_request, upsert_dealer_price, upsert_farmer_profile
+from pricing_service import calculated_farmer_price, create_price_override, create_product_price_override, get_farmer_profile, import_price_sheet, latest_field_price_request, latest_product_price_requests, list_dealer_prices, list_price_requests, review_price_request, upsert_dealer_price, upsert_farmer_profile
 from seed_engine import rank_seeds
 from soil_service import enrich_field, enrich_prospect, prospect_soil_status
 
@@ -106,6 +106,13 @@ class FarmerPricingProfileRequest(BaseModel):
 
 class PriceOverrideRequest(BaseModel):
     crop_year: int
+    requested_price: float
+    request_note: str | None = None
+
+
+class ProductPriceOverrideRequest(BaseModel):
+    crop_year: int
+    seed_product_id: int
     requested_price: float
     request_note: str | None = None
 
@@ -585,6 +592,32 @@ def field_price_override(field_id: int, req: PriceOverrideRequest, request: Requ
         _require_field_access(conn, field_id, user)
     try:
         return create_price_override(field_id, req.crop_year, req.requested_price, int(user["id"]), req.request_note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/farms/{farm_id}/product-price-requests")
+def farm_product_price_requests(farm_id: int, crop_year: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    with connect() as conn:
+        _require_farm_access(conn, farm_id, user)
+    return {"farm_id": farm_id, "crop_year": crop_year, "requests": latest_product_price_requests(farm_id, crop_year)}
+
+@app.post("/api/farms/{farm_id}/product-price-override")
+def farm_product_price_override(farm_id: int, req: ProductPriceOverrideRequest, request: Request):
+    user = _require(request, "dealer_user", "dealer_admin")
+    with connect() as conn:
+        farm = _require_farm_access(conn, farm_id, user)
+    if _role(user) == "dealer_user" and not bool(user.get("sales_enabled", True)):
+        raise HTTPException(status_code=403, detail="Sales book access is required to request pricing")
+    try:
+        return create_product_price_override(
+            farm_id, req.crop_year, req.seed_product_id, req.requested_price, int(user["id"]), req.request_note
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

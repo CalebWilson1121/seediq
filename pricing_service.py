@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import csv
+from pathlib import Path
 from typing import Any
+
+from openpyxl import load_workbook
 
 from database import connect, row_to_dict, rows_to_dicts
 
@@ -9,6 +13,91 @@ def _money(value: Any) -> float | None:
     if value is None:
         return None
     return round(float(value), 2)
+
+
+def _norm_header(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").strip().lower() if ch.isalnum())
+
+
+def import_price_sheet(path: Path, organization_id: int, crop_year: int) -> dict[str, Any]:
+    """Import a dealer price sheet using common spreadsheet headers.
+
+    Required: Product/Product Name and Base Price/Dealer Price.
+    Optional: List Price/MSRP and Dealer Cost/Cost.
+    """
+    rows: list[dict[str, Any]] = []
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xlsm"}:
+        wb = load_workbook(path, data_only=True, read_only=True)
+        ws = wb.active
+        values = list(ws.iter_rows(values_only=True))
+        if not values:
+            raise ValueError("Pricing spreadsheet is empty")
+        headers = [_norm_header(x) for x in values[0]]
+        for raw in values[1:]:
+            rows.append({headers[i]: raw[i] for i in range(min(len(headers), len(raw)))})
+    elif suffix == ".csv":
+        with path.open("r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for raw in reader:
+                rows.append({_norm_header(k): v for k, v in raw.items()})
+    else:
+        raise ValueError("Upload an .xlsx or .csv pricing file")
+
+    product_keys = ("product", "productname", "hybrid", "variety", "seedproduct", "sku")
+    base_keys = ("baseprice", "dealerprice", "standardprice", "farmerbaseprice", "price")
+    list_keys = ("listprice", "msrp", "retailprice", "suggestedretail")
+    cost_keys = ("dealercost", "cost", "netcost")
+
+    def pick(row: dict[str, Any], keys: tuple[str, ...]):
+        for key in keys:
+            if key in row and row[key] not in (None, ""):
+                return row[key]
+        return None
+
+    with connect() as conn:
+        products = conn.execute(
+            "SELECT sp.id,sp.product_name FROM seed_products sp JOIN seed_catalogs sc ON sc.id=sp.catalog_id "
+            "WHERE sc.organization_id=? AND sc.crop_year=?",
+            (organization_id, crop_year),
+        ).fetchall()
+    product_map = {str(p["product_name"]).strip().lower(): int(p["id"]) for p in products}
+
+    imported = 0
+    unmatched: list[str] = []
+    invalid: list[str] = []
+    for row in rows:
+        name = str(pick(row, product_keys) or "").strip()
+        if not name:
+            continue
+        product_id = product_map.get(name.lower())
+        if not product_id:
+            unmatched.append(name)
+            continue
+        try:
+            base_raw = pick(row, base_keys)
+            if base_raw in (None, ""):
+                invalid.append(name)
+                continue
+            base_price = float(str(base_raw).replace("$", "").replace(",", ""))
+            list_raw = pick(row, list_keys)
+            cost_raw = pick(row, cost_keys)
+            list_price = float(str(list_raw).replace("$", "").replace(",", "")) if list_raw not in (None, "") else None
+            dealer_cost = float(str(cost_raw).replace("$", "").replace(",", "")) if cost_raw not in (None, "") else None
+            upsert_dealer_price(organization_id, crop_year, product_id, list_price, base_price, dealer_cost)
+            imported += 1
+        except Exception:
+            invalid.append(name)
+
+    return {
+        "crop_year": crop_year,
+        "rows_read": len(rows),
+        "imported": imported,
+        "unmatched_count": len(unmatched),
+        "unmatched": unmatched[:50],
+        "invalid_count": len(invalid),
+        "invalid": invalid[:50],
+    }
 
 
 def list_dealer_prices(organization_id: int, crop_year: int) -> list[dict[str, Any]]:

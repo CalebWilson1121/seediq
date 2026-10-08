@@ -51,14 +51,16 @@ h1{margin:5px 0 5px;font-size:30px}h2{margin:0 0 12px}.muted{color:var(--muted)}
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const nice=s=>String(s||'new').replaceAll('_',' ').replace(/\b\w/g,m=>m.toUpperCase());
 function roleCopy(me){
-  if(me.role==='super_admin')return {title:'AcreFit Network Pipeline',heading:'All Visible Opportunities',scope:'Super Admin',note:'You can see every dealership and salesperson pipeline in AcreFit.'};
+  if(me.role==='super_admin')return {title:'AcreFit Pipeline',heading:'Visible Opportunities',scope:'Super Admin',note:'W5 can view the selected dealer pipeline or the full AcreFit network.'};
   if(me.role==='dealer_admin')return {title:'Dealership Sales Pipeline',heading:'Dealership Opportunities',scope:'Dealer Admin',note:'You can see every opportunity owned by salespeople inside your dealership.'};
   return {title:'My Sales Pipeline',heading:'My Opportunities',scope:'Salesperson',note:'You only see prospects and sales opportunities assigned to you. Other reps\' pipelines are not returned to your account.'};
 }
 async function api(path){const r=await fetch(path);let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.detail||('HTTP '+r.status));return d}
 async function boot(){
   try{
-    const [me,ps]=await Promise.all([api('/api/auth/me'),api('/api/prospects')]);
+    const qs=new URLSearchParams(location.search),orgId=Number(qs.get('organization_id'))||null;
+    const me=await api('/api/auth/me');
+    const ps=await api('/api/prospects'+(me.role==='super_admin'&&orgId?'?organization_id='+orgId:''));
     const copy=roleCopy(me);
     document.getElementById('title').textContent=copy.title;
     document.getElementById('oppHeading').textContent=copy.heading;

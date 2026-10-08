@@ -86,6 +86,9 @@ def ingest_signed_upload(
     document_type: str | None = None,
     target_farm_id: int | None = None,
     reprocess: bool = False,
+    organization_id: int | None = None,
+    assigned_salesperson_id: int | None = None,
+    created_by_user_id: int | None = None,
 ) -> dict:
     if not object_path.startswith("incoming/"):
         raise ValueError("Invalid upload object path")
@@ -98,6 +101,9 @@ def ingest_signed_upload(
             document_type,
             reprocess=reprocess,
             target_farm_id=target_farm_id,
+            organization_id=organization_id,
+            assigned_salesperson_id=assigned_salesperson_id,
+            created_by_user_id=created_by_user_id,
         )
         result["upload_transport"] = "direct-to-supabase"
         return result

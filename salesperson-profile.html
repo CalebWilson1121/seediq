@@ -61,4 +61,4 @@ async function saveProfile(){try{await api('/api/dealer/team/'+userId+'/profile'
 async function resetPassword(){if(!confirm("Reset this user's password? Their current password and active sessions will stop working."))return;try{const r=await api('/api/dealer/team/'+userId+'/reset-password',{method:'POST'});document.getElementById('msg').innerHTML='<div class="notice"><b>Temporary password created.</b><br>Copy and share this once:<br><span class="credential">'+esc(r.temporary_password)+'</span></div>'}catch(err){document.getElementById('msg').innerHTML='<div class="notice">'+esc(err.message)+'</div>'}}
 async function load(){if(!userId)throw Error('Missing salesperson');data=await api('/api/dealer/team/'+userId+'/profile');render()}
 load().catch(err=>document.getElementById('content').innerHTML='<div class="card"><b>Could not load profile.</b><br>'+esc(err.message)+'</div>');
-</script></body></html>
+</script><script src="/activity.js"></script></body></html>

@@ -77,6 +77,112 @@ def _refresh_prospect_acres(farm_id: int) -> None:
         )
 
 
+def _reference_boundary(field) -> dict | None:
+    meta = _json_obj(field.get("metadata_json"))
+    ref = meta.get("reference_boundary_geojson")
+    if isinstance(ref, dict) and ref.get("type") == "Feature":
+        ref = ref.get("geometry")
+    if not isinstance(ref, dict):
+        return None
+    try:
+        geom = shape(ref)
+        if geom.geom_type not in {"Polygon", "MultiPolygon"} or geom.is_empty:
+            return None
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+        if geom.geom_type not in {"Polygon", "MultiPolygon"} or geom.is_empty or not geom.is_valid:
+            return None
+        return mapping(geom)
+    except Exception:
+        return None
+
+
+def _has_exact_boundary(field_id: int) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT boundary_geojson FROM field_locations WHERE field_id=? "
+            "ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 1",
+            (field_id,),
+        ).fetchone()
+    return bool(row and row.get("boundary_geojson"))
+
+
+def _confirm_reference_boundary(field) -> dict:
+    field_id = int(field["id"])
+    ref = _reference_boundary(field)
+    if not ref:
+        raise ValueError("No valid SOI reference boundary is available")
+    location = set_exact_boundary(field_id, ref)
+    meta = _json_obj(field.get("metadata_json"))
+    meta["boundary_source"] = "confirmed_soi_reference"
+    meta["boundary_confirmed"] = True
+    meta["management_field"] = True
+    with connect() as conn:
+        conn.execute(
+            "UPDATE fields SET metadata_json=?::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (json_dumps(meta), field_id),
+        )
+        conn.execute("DELETE FROM field_soils WHERE field_id=?", (field_id,))
+    return {"field_id": field_id, "location": location}
+
+
+@router.post("/api/fields/{field_id}/boundary/confirm-reference")
+def confirm_reference_boundary(field_id: int):
+    try:
+        with connect() as conn:
+            field = conn.execute("SELECT * FROM fields WHERE id=?", (field_id,)).fetchone()
+        if not field:
+            raise KeyError(f"Field {field_id} not found")
+        if _has_exact_boundary(field_id):
+            return {"field_id": field_id, "confirmed": False, "already_mapped": True}
+        result = _confirm_reference_boundary(field)
+        return {**result, "confirmed": True, "already_mapped": False}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/farms/{farm_id}/boundaries/confirm-all")
+def confirm_all_reference_boundaries(farm_id: int):
+    try:
+        with connect() as conn:
+            farm = conn.execute("SELECT id FROM farms WHERE id=?", (farm_id,)).fetchone()
+            if not farm:
+                raise KeyError(f"Farm {farm_id} not found")
+            fields = conn.execute("SELECT * FROM fields WHERE farm_id=? ORDER BY id", (farm_id,)).fetchall()
+
+        confirmed = []
+        already_mapped = []
+        skipped = []
+        for field in fields:
+            field_id = int(field["id"])
+            if _has_exact_boundary(field_id):
+                already_mapped.append(field_id)
+                continue
+            if not _reference_boundary(field):
+                skipped.append({"field_id": field_id, "name": field.get("name"), "reason": "No valid SOI reference boundary"})
+                continue
+            try:
+                _confirm_reference_boundary(field)
+                confirmed.append(field_id)
+            except Exception as exc:
+                skipped.append({"field_id": field_id, "name": field.get("name"), "reason": str(exc)[:180]})
+
+        return {
+            "farm_id": farm_id,
+            "confirmed_count": len(confirmed),
+            "confirmed_field_ids": confirmed,
+            "already_mapped_count": len(already_mapped),
+            "already_mapped_field_ids": already_mapped,
+            "skipped_count": len(skipped),
+            "skipped": skipped,
+            "soils_need_refresh": bool(confirmed),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/api/farms/{farm_id}/fields/manual")
 def create_manual_field(farm_id: int, req: ManualFieldRequest):
     name = (req.name or "").strip()

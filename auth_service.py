@@ -210,6 +210,8 @@ def create_dealer_user(organization_id: int, email: str, display_name: str, role
     role = (role or "salesperson").strip().lower()
     if role not in {"salesperson", "dealer_admin"}:
         raise ValueError("Role must be salesperson or dealer_admin")
+    if role == "salesperson":
+        sales_enabled = True
     email = email.strip().lower()
     display_name = display_name.strip()
     if not email or "@" not in email:
@@ -308,7 +310,8 @@ def update_dealer_team_user(organization_id: int, user_id: int, display_name: st
         ).fetchone()
         if duplicate:
             raise ValueError("Another AcreFit user already uses that email")
-        if sales_enabled is None:
+        effective_sales_enabled = True if target["global_role"] == "dealer_user" else sales_enabled
+        if effective_sales_enabled is None:
             conn.execute(
                 "UPDATE platform_users SET display_name=?,email=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (display_name, email, user_id),
@@ -316,7 +319,7 @@ def update_dealer_team_user(organization_id: int, user_id: int, display_name: st
         else:
             conn.execute(
                 "UPDATE platform_users SET display_name=?,email=?,sales_enabled=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (display_name, email, bool(sales_enabled), user_id),
+                (display_name, email, bool(effective_sales_enabled), user_id),
             )
         conn.execute(
             "UPDATE dealer_members SET display_name=?,email=? WHERE organization_id=? AND platform_user_id=?",

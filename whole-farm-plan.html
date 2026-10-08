@@ -25,4 +25,4 @@ async function saveInputs(runFit=true,seedProductId=null){const fid=selectedFiel
 async function chooseSeed(seedProductId,pop){document.getElementById('pop').value=pop;const body={crop_year:year,yield_goal:val('yg'),target_population:pop,seed_product_id:seedProductId,seed_price_per_unit:val('price'),seeds_per_unit:intval('unitSize'),pricing_source:'dealer_input'};const fid=selectedField.field_id;await api('/api/fields/'+fid+'/seed-plan',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});await refresh();await openField(fid)}
 function val(id){const v=document.getElementById(id)?.value;return v===''||v==null?null:Number(v)}function intval(id){const v=val(id);return v==null?null:Math.round(v)}
 boot().catch(e=>document.getElementById('content').innerHTML='<div class="card"><b>Could not load seed plan.</b><br>'+esc(e.message)+'</div>');
-</script></body></html>
+</script><script src="/activity.js"></script></body></html>

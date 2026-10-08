@@ -287,6 +287,144 @@ def reset_dealer_team_user_password(organization_id: int, user_id: int, actor_us
     }
 
 
+def update_dealer_team_user(organization_id: int, user_id: int, display_name: str, email: str, actor_user_id: int) -> dict[str, Any]:
+    display_name = (display_name or "").strip()
+    email = (email or "").strip().lower()
+    if not display_name:
+        raise ValueError("Name is required")
+    if not email or "@" not in email:
+        raise ValueError("A valid email is required")
+    with connect() as conn:
+        target = conn.execute(
+            "SELECT id,email,display_name,organization_id,global_role,status FROM platform_users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+        if not target or int(target["organization_id"] or 0) != int(organization_id):
+            raise KeyError("Dealer user not found")
+        duplicate = conn.execute(
+            "SELECT id FROM platform_users WHERE lower(email)=? AND id<>?",
+            (email, user_id),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("Another AcreFit user already uses that email")
+        conn.execute(
+            "UPDATE platform_users SET display_name=?,email=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (display_name, email, user_id),
+        )
+        conn.execute(
+            "UPDATE dealer_members SET display_name=?,email=? WHERE organization_id=? AND platform_user_id=?",
+            (display_name, email, organization_id, user_id),
+        )
+        conn.execute(
+            "UPDATE dealer_members SET display_name=?,email=? WHERE organization_id=? AND lower(email)=lower(?) AND platform_user_id IS NULL",
+            (display_name, email, organization_id, target["email"]),
+        )
+        conn.execute(
+            "INSERT INTO admin_audit_log(actor_user_id,action,entity_type,entity_id,details_json) "
+            "VALUES(?,?,?,?,jsonb_build_object('email',?,'display_name',?))",
+            (actor_user_id, "dealer_user_profile_updated", "platform_user", str(user_id), email, display_name),
+        )
+        row = conn.execute(
+            "SELECT id,email,display_name,global_role,status,organization_id,created_at,last_login_at FROM platform_users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+    result = dict(row)
+    result["role"] = "dealer_admin" if result["global_role"] == "dealer_admin" else "salesperson"
+    return result
+
+
+def dealer_salesperson_profile(organization_id: int, user_id: int) -> dict[str, Any]:
+    with connect() as conn:
+        user = conn.execute(
+            "SELECT id,email,display_name,global_role,status,organization_id,created_at,updated_at,last_login_at "
+            "FROM platform_users WHERE id=? AND organization_id=?",
+            (user_id, organization_id),
+        ).fetchone()
+        if not user:
+            raise KeyError("Dealer user not found")
+
+        pipeline = rows_to_dicts(conn.execute(
+            "SELECT status,COUNT(*) AS farms,COALESCE(SUM(total_acres),0) AS acres "
+            "FROM prospects WHERE organization_id=? AND assigned_salesperson_id=? GROUP BY status ORDER BY status",
+            (organization_id, user_id),
+        ).fetchall())
+
+        farms = rows_to_dicts(conn.execute(
+            "SELECT p.id AS prospect_id,p.prospect_name,p.status,p.total_acres,p.updated_at,f.id AS farm_id,"
+            "f.producer_name,f.county,f.state,"
+            "(SELECT COUNT(*) FROM fields ff WHERE ff.farm_id=f.id) AS field_count,"
+            "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id WHERE ff.farm_id=f.id) AS seed_units,"
+            "(SELECT COUNT(*) FROM seed_proposals sp WHERE sp.prospect_id=p.id) AS proposal_count "
+            "FROM prospects p JOIN farms f ON f.id=p.farm_id "
+            "WHERE p.organization_id=? AND p.assigned_salesperson_id=? ORDER BY p.updated_at DESC",
+            (organization_id, user_id),
+        ).fetchall())
+
+        totals = conn.execute(
+            "SELECT COUNT(*) AS farms,COALESCE(SUM(total_acres),0) AS acres,"
+            "COALESCE(SUM(CASE WHEN lower(status)='won' THEN total_acres ELSE 0 END),0) AS won_acres,"
+            "COALESCE(SUM(CASE WHEN lower(status)='lost' THEN total_acres ELSE 0 END),0) AS lost_acres "
+            "FROM prospects WHERE organization_id=? AND assigned_salesperson_id=?",
+            (organization_id, user_id),
+        ).fetchone()
+
+        seed = conn.execute(
+            "SELECT COALESCE(SUM(cp.units_required),0) AS units_recommended,"
+            "COALESCE(SUM(CASE WHEN upper(cp.crop)='CORN' THEN cp.units_required ELSE 0 END),0) AS corn_units,"
+            "COALESCE(SUM(CASE WHEN upper(cp.crop) IN ('SOY','SOYBEANS','SOYBEAN') THEN cp.units_required ELSE 0 END),0) AS soybean_units,"
+            "COALESCE(SUM(cp.total_seed_cost),0) AS seed_value,"
+            "COUNT(DISTINCT CASE WHEN cp.selected_seed_product_id IS NOT NULL THEN cp.field_id END) AS fields_with_seed "
+            "FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id "
+            "WHERE fa.organization_id=? AND fa.assigned_salesperson_id=?",
+            (organization_id, user_id),
+        ).fetchone()
+
+        proposals = conn.execute(
+            "SELECT COUNT(*) AS total,"
+            "COUNT(*) FILTER (WHERE status IN ('ready','sent','viewed')) AS active,"
+            "COUNT(*) FILTER (WHERE status='approved') AS approved "
+            "FROM seed_proposals sp JOIN prospects p ON p.id=sp.prospect_id "
+            "WHERE p.organization_id=? AND p.assigned_salesperson_id=?",
+            (organization_id, user_id),
+        ).fetchone()
+
+        won_units = conn.execute(
+            "SELECT COALESCE(SUM(cp.units_required),0) AS units "
+            "FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id "
+            "JOIN prospects p ON p.farm_id=fa.id "
+            "WHERE p.organization_id=? AND p.assigned_salesperson_id=? AND lower(p.status)='won'",
+            (organization_id, user_id),
+        ).fetchone()
+
+        activity = conn.execute(
+            "SELECT COALESCE(SUM(active_seconds),0) AS active_seconds,COALESCE(SUM(page_views),0) AS page_views,"
+            "COUNT(*) AS sessions,MAX(last_seen_at) AS last_activity,"
+            "COUNT(DISTINCT DATE(last_seen_at)) FILTER (WHERE last_seen_at >= CURRENT_TIMESTAMP - INTERVAL '30 days') AS active_days_30 "
+            "FROM user_activity_sessions WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+
+        recent_activity = rows_to_dicts(conn.execute(
+            "SELECT started_at,last_seen_at,active_seconds,page_views,last_path "
+            "FROM user_activity_sessions WHERE user_id=? ORDER BY last_seen_at DESC LIMIT 12",
+            (user_id,),
+        ).fetchall())
+
+    u = dict(user)
+    u["role"] = "dealer_admin" if u["global_role"] == "dealer_admin" else "salesperson"
+    return {
+        "user": u,
+        "totals": dict(totals),
+        "seed": {**dict(seed), "won_units": float(won_units["units"] or 0)},
+        "proposals": dict(proposals),
+        "pipeline": pipeline,
+        "farms": farms,
+        "activity": dict(activity),
+        "recent_activity": recent_activity,
+        "tracking_note": "Active platform time is measured from AcreFit heartbeat activity beginning when this feature was enabled.",
+    }
+
+
 def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None = None) -> dict[str, Any]:
     with connect() as conn:
         org = conn.execute("SELECT id,name,status,access_enabled,license_end,max_seats FROM dealer_organizations WHERE id=?", (organization_id,)).fetchone()

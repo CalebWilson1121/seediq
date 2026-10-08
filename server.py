@@ -20,6 +20,7 @@ from context_builder import build_farm_context
 from crop_plan_service import apply_soi_crop_rotation, list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
 from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
 from ingestion import ingest_file
+from pricing_service import calculated_farmer_price, create_price_override, get_farmer_profile, latest_field_price_request, list_dealer_prices, list_price_requests, review_price_request, upsert_dealer_price, upsert_farmer_profile
 from seed_engine import rank_seeds
 from soil_service import enrich_field, enrich_prospect, prospect_soil_status
 
@@ -85,6 +86,33 @@ class SeedSelectionRequest(BaseModel):
     seed_product_id: int | None = None
     target_population: int | None = None
     notes: str | None = None
+
+
+class DealerSeedPriceRequest(BaseModel):
+    crop_year: int
+    seed_product_id: int
+    list_price: float | None = None
+    base_price: float
+    dealer_cost: float | None = None
+
+class FarmerPricingProfileRequest(BaseModel):
+    crop_year: int
+    volume_discount_pct: float = 0
+    early_pay_discount_pct: float = 0
+    loyalty_discount_per_unit: float = 0
+    custom_discount_per_unit: float = 0
+    pricing_tier: str | None = None
+    notes: str | None = None
+
+class PriceOverrideRequest(BaseModel):
+    crop_year: int
+    requested_price: float
+    request_note: str | None = None
+
+class PriceReviewRequest(BaseModel):
+    decision: str
+    approved_price: float | None = None
+    review_note: str | None = None
 
 @app.on_event("startup")
 def startup() -> None:
@@ -453,6 +481,108 @@ def dealer_dashboard(request: Request, crop_year: int = 2027, organization_id: i
     org_id = _dealer_org_for_user(user, organization_id)
     salesperson_user_id = int(user["id"]) if _role(user) == "salesperson" else None
     return dealer_demo_dashboard(org_id, salesperson_user_id, crop_year)
+
+
+@app.get("/api/dealer/pricing")
+def dealer_pricing(request: Request, crop_year: int = 2027, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin", "dealer_user")
+    org_id = _dealer_org_for_user(user, organization_id)
+    rows = list_dealer_prices(org_id, crop_year)
+    if _role(user) == "salesperson":
+        for row in rows:
+            row.pop("dealer_cost", None)
+    return {"organization_id": org_id, "crop_year": crop_year, "prices": rows}
+
+@app.put("/api/dealer/pricing")
+def dealer_pricing_update(req: DealerSeedPriceRequest, request: Request, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
+    try:
+        return upsert_dealer_price(org_id, req.crop_year, req.seed_product_id, req.list_price, req.base_price, req.dealer_cost)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+@app.get("/api/farms/{farm_id}/pricing-profile")
+def farm_pricing_profile(farm_id: int, crop_year: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    with connect() as conn:
+        _require_farm_access(conn, farm_id, user)
+    try:
+        return get_farmer_profile(farm_id, crop_year)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.put("/api/farms/{farm_id}/pricing-profile")
+def farm_pricing_profile_update(farm_id: int, req: FarmerPricingProfileRequest, request: Request):
+    user = _require(request, "super_admin", "dealer_admin")
+    with connect() as conn:
+        farm = _require_farm_access(conn, farm_id, user)
+    if _role(user) != "super_admin" and int(farm["organization_id"]) != int(user["organization_id"]):
+        raise HTTPException(status_code=403, detail="You can only manage pricing for your dealership")
+    return upsert_farmer_profile(
+        farm_id, req.crop_year, req.volume_discount_pct, req.early_pay_discount_pct,
+        req.loyalty_discount_per_unit, req.custom_discount_per_unit, req.pricing_tier,
+        req.notes, int(user["id"]),
+    )
+
+@app.get("/api/fields/{field_id}/pricing")
+def field_pricing(field_id: int, crop_year: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    with connect() as conn:
+        access = _require_field_access(conn, field_id, user)
+        plan = conn.execute(
+            "SELECT cp.*,sp.product_name,sp.brand FROM field_crop_plans cp "
+            "LEFT JOIN seed_products sp ON sp.id=cp.selected_seed_product_id "
+            "WHERE cp.field_id=? AND cp.crop_year=?",
+            (field_id, crop_year),
+        ).fetchone()
+    if not plan or not plan.get("selected_seed_product_id"):
+        return {"field_id": field_id, "crop_year": crop_year, "available": False, "reason": "Select a seed product first"}
+    standard = calculated_farmer_price(int(access["farm_id"]), crop_year, int(plan["selected_seed_product_id"]))
+    if _role(user) == "salesperson":
+        standard.pop("dealer_cost", None)
+    return {
+        "field_id": field_id,
+        "crop_year": crop_year,
+        "plan": row_to_dict(plan),
+        "standard_pricing": standard,
+        "latest_request": latest_field_price_request(field_id, crop_year),
+    }
+
+@app.post("/api/fields/{field_id}/price-override")
+def field_price_override(field_id: int, req: PriceOverrideRequest, request: Request):
+    user = _require(request, "dealer_user", "dealer_admin")
+    with connect() as conn:
+        _require_field_access(conn, field_id, user)
+    try:
+        return create_price_override(field_id, req.crop_year, req.requested_price, int(user["id"]), req.request_note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.get("/api/dealer/price-approvals")
+def dealer_price_approvals(request: Request, status: str | None = "pending", organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
+    return {"organization_id": org_id, "requests": list_price_requests(org_id, status)}
+
+@app.post("/api/dealer/price-approvals/{request_id}/review")
+def dealer_price_approval_review(request_id: int, req: PriceReviewRequest, request: Request, organization_id: int | None = None):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
+    try:
+        return review_price_request(request_id, org_id, int(user["id"]), req.decision, req.approved_price, req.review_note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/api/dealer/team")
 def get_dealer_team(request: Request, organization_id: int | None = None):

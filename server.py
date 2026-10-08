@@ -17,7 +17,7 @@ from ai_service import run_ai_task
 from auth_service import admin_overview, create_dealer_user, current_user, dealer_demo_dashboard, dealer_detail, dealer_salesperson_profile, dealer_team, login, logout, require_role, reset_dealer_team_user_password, set_dealer_access, set_dealer_team_user_access, set_user_access, update_dealer_team_user
 from catalog_service import import_catalog, list_catalogs, list_organizations, list_products, publish_catalog
 from context_builder import build_farm_context
-from crop_plan_service import list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
+from crop_plan_service import apply_soi_crop_rotation, list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
 from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
 from ingestion import ingest_file
 from seed_engine import rank_seeds
@@ -711,6 +711,11 @@ def update_farm_defaults(farm_id: int, req: FarmDefaultsRequest):
 @app.get("/api/farms/{farm_id}/crop-plans")
 def get_crop_plans(farm_id: int, crop_year: int):
     return {"farm_id": farm_id, "crop_year": crop_year, "fields": list_field_plans(farm_id, crop_year)}
+
+
+@app.post("/api/farms/{farm_id}/crop-plans/apply-soi")
+def apply_soi_crop_plan(farm_id: int, crop_year: int):
+    return apply_soi_crop_rotation(farm_id, crop_year)
 
 @app.put("/api/fields/{field_id}/crop")
 def assign_crop(field_id: int, req: CropRequest):

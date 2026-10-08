@@ -346,6 +346,78 @@ def create_price_override(
     return result
 
 
+def create_product_price_override(
+    farm_id: int,
+    crop_year: int,
+    seed_product_id: int,
+    requested_price: float,
+    requested_by_user_id: int,
+    request_note: str | None = None,
+) -> dict[str, Any]:
+    with connect() as conn:
+        farm = conn.execute(
+            "SELECT f.id,f.organization_id,p.id AS prospect_id FROM farms f "
+            "LEFT JOIN prospects p ON p.farm_id=f.id WHERE f.id=?",
+            (farm_id,),
+        ).fetchone()
+        if not farm:
+            raise KeyError("Farm not found")
+        plans = rows_to_dicts(conn.execute(
+            "SELECT cp.*,fld.acres FROM field_crop_plans cp "
+            "JOIN fields fld ON fld.id=cp.field_id "
+            "WHERE fld.farm_id=? AND cp.crop_year=? AND cp.selected_seed_product_id=?",
+            (farm_id, crop_year, seed_product_id),
+        ).fetchall())
+        if not plans:
+            raise ValueError("This product is not currently selected on the farm")
+
+    standard = calculated_farmer_price(farm_id, crop_year, seed_product_id)
+    if not standard.get("available"):
+        raise ValueError("Dealer pricing is not configured for this product")
+
+    current_prices = [float(x["seed_price_per_unit"]) for x in plans if x.get("seed_price_per_unit") is not None]
+    standard_price = round(current_prices[0], 2) if current_prices else float(standard["calculated_price"])
+    if abs(float(requested_price) - standard_price) < 0.005:
+        raise ValueError("Requested price matches the current farmer price; approval is not required")
+
+    units = sum(float(x.get("units_required") or 0) for x in plans)
+    acres = sum(float(x.get("acres") or 0) for x in plans)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE price_approval_requests SET status='superseded',updated_at=CURRENT_TIMESTAMP "
+            "WHERE farm_id=? AND crop_year=? AND seed_product_id=? AND status='pending'",
+            (farm_id, crop_year, seed_product_id),
+        )
+        req = conn.execute(
+            "INSERT INTO price_approval_requests(organization_id,farm_id,prospect_id,field_id,crop_year,seed_product_id,"
+            "requested_by_user_id,standard_price,requested_price,units,status,request_note,request_scope,product_acres,field_count) "
+            "VALUES(?,?,?,NULL,?,?,?,?,?,?,'pending',?,'product',?,?) RETURNING *",
+            (
+                farm["organization_id"], farm_id, farm.get("prospect_id"), crop_year, seed_product_id,
+                requested_by_user_id, standard_price, requested_price, round(units, 3),
+                request_note, round(acres, 3), len(plans),
+            ),
+        ).fetchone()
+    result = dict(req)
+    result["standard_pricing"] = standard
+    return result
+
+
+def latest_product_price_requests(farm_id: int, crop_year: int) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ON (r.seed_product_id) r.*,u.display_name AS requested_by_name,"
+            "ru.display_name AS reviewed_by_name "
+            "FROM price_approval_requests r "
+            "JOIN platform_users u ON u.id=r.requested_by_user_id "
+            "LEFT JOIN platform_users ru ON ru.id=r.reviewed_by_user_id "
+            "WHERE r.farm_id=? AND r.crop_year=? AND r.request_scope='product' "
+            "ORDER BY r.seed_product_id,r.created_at DESC",
+            (farm_id, crop_year),
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
 def list_price_requests(organization_id: int, status: str | None = "pending") -> list[dict[str, Any]]:
     where = "WHERE r.organization_id=?"
     params: list[Any] = [organization_id]
@@ -357,7 +429,7 @@ def list_price_requests(organization_id: int, status: str | None = "pending") ->
             "SELECT r.*,f.name AS field_name,fa.farm_name,p.prospect_name,sp.product_name,sp.brand,"
             "u.display_name AS requested_by_name,ru.display_name AS reviewed_by_name,dsp.dealer_cost "
             "FROM price_approval_requests r "
-            "JOIN fields f ON f.id=r.field_id JOIN farms fa ON fa.id=r.farm_id "
+            "LEFT JOIN fields f ON f.id=r.field_id JOIN farms fa ON fa.id=r.farm_id "
             "LEFT JOIN prospects p ON p.id=r.prospect_id JOIN seed_products sp ON sp.id=r.seed_product_id "
             "JOIN platform_users u ON u.id=r.requested_by_user_id "
             "LEFT JOIN platform_users ru ON ru.id=r.reviewed_by_user_id "
@@ -405,26 +477,35 @@ def review_price_request(
             (status, reviewer_user_id, final_price, review_note, request_id),
         )
         if final_price is not None:
-            plan = conn.execute(
-                "SELECT cp.*,f.acres FROM field_crop_plans cp JOIN fields f ON f.id=cp.field_id "
-                "WHERE cp.field_id=? AND cp.crop_year=?",
-                (req["field_id"], req["crop_year"]),
-            ).fetchone()
-            if plan:
+            if str(req.get("request_scope") or "field") == "product":
+                plans = rows_to_dicts(conn.execute(
+                    "SELECT cp.*,f.acres FROM field_crop_plans cp JOIN fields f ON f.id=cp.field_id "
+                    "WHERE f.farm_id=? AND cp.crop_year=? AND cp.selected_seed_product_id=?",
+                    (req["farm_id"], req["crop_year"], req["seed_product_id"]),
+                ).fetchall())
+            else:
+                one = conn.execute(
+                    "SELECT cp.*,f.acres FROM field_crop_plans cp JOIN fields f ON f.id=cp.field_id "
+                    "WHERE cp.field_id=? AND cp.crop_year=?",
+                    (req["field_id"], req["crop_year"]),
+                ).fetchone()
+                plans = [dict(one)] if one else []
+
+            for plan in plans:
                 acres = float(plan.get("acres") or 0)
                 population = float(plan.get("target_population") or 0)
                 seeds_per_unit = float(plan.get("seeds_per_unit") or 0)
-                units_required = acres * population / seeds_per_unit if population and seeds_per_unit else None
+                units_required = acres * population / seeds_per_unit if population and seeds_per_unit else plan.get("units_required")
                 seed_cost_per_acre = population / seeds_per_unit * final_price if population and seeds_per_unit else None
-                total_seed_cost = units_required * final_price if units_required is not None else None
+                total_seed_cost = float(units_required) * final_price if units_required is not None else None
                 conn.execute(
                     "UPDATE field_crop_plans SET seed_price_per_unit=?,pricing_source=?,units_required=?,seed_cost_per_acre=?,"
-                    "total_seed_cost=?,updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
+                    "total_seed_cost=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
                     (
                         final_price,
                         "dealer_approved_override" if status == "approved" else "dealer_counter_price",
                         units_required, seed_cost_per_acre, total_seed_cost,
-                        req["field_id"], req["crop_year"],
+                        plan["id"],
                     ),
                 )
         row = conn.execute("SELECT * FROM price_approval_requests WHERE id=?", (request_id,)).fetchone()

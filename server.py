@@ -63,6 +63,7 @@ class ProspectCreateRequest(BaseModel):
     state: str
     county: str
     organization_id: int = 2
+    assigned_salesperson_id: int | None = None
 
 class RotateRequest(BaseModel):
     from_year: int
@@ -96,6 +97,71 @@ def _require(request: Request, *roles: str):
         return require_role(_user(request), *roles)
     except PermissionError as exc:
         raise HTTPException(status_code=401 if str(exc) == "Login required" else 403, detail=str(exc)) from exc
+
+
+def _role(user: dict) -> str:
+    if user.get("global_role") == "super_admin":
+        return "super_admin"
+    if user.get("global_role") == "dealer_admin":
+        return "dealer_admin"
+    return "salesperson"
+
+
+def _resolve_salesperson(conn, user: dict, organization_id: int, requested_id: int | None = None) -> int:
+    role = _role(user)
+    if role == "salesperson":
+        if int(user.get("organization_id") or 0) != int(organization_id):
+            raise HTTPException(status_code=403, detail="Salespeople can only create records in their own dealership")
+        return int(user["id"])
+    if requested_id is not None:
+        target = conn.execute(
+            "SELECT id,organization_id,global_role,status FROM platform_users WHERE id=?",
+            (requested_id,),
+        ).fetchone()
+        if not target or target["status"] != "active":
+            raise HTTPException(status_code=400, detail="Assigned salesperson is unavailable")
+        if target["global_role"] != "dealer_user":
+            raise HTTPException(status_code=400, detail="Assigned user must be a salesperson")
+        if int(target["organization_id"] or 0) != int(organization_id):
+            raise HTTPException(status_code=403, detail="Assigned salesperson must belong to the same dealership")
+        return int(target["id"])
+    if role == "dealer_admin":
+        target = conn.execute(
+            "SELECT id FROM platform_users WHERE organization_id=? AND global_role='dealer_user' AND status='active' ORDER BY id LIMIT 1",
+            (organization_id,),
+        ).fetchone()
+        if not target:
+            raise HTTPException(status_code=400, detail="Add an active salesperson before creating a prospect")
+        return int(target["id"])
+    return int(user["id"])
+
+
+def _prospect_scope(user: dict) -> tuple[str, tuple]:
+    role = _role(user)
+    if role == "super_admin":
+        return "", ()
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
+    if role == "dealer_admin":
+        return " WHERE p.organization_id=?", (int(user["organization_id"]),)
+    return " WHERE p.organization_id=? AND p.assigned_salesperson_id=?", (int(user["organization_id"]), int(user["id"]))
+
+
+def _require_prospect_access(conn, prospect_id: int, user: dict):
+    row = conn.execute(
+        "SELECT id,organization_id,assigned_salesperson_id FROM prospects WHERE id=?",
+        (prospect_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+    role = _role(user)
+    if role == "super_admin":
+        return row
+    if int(row["organization_id"] or 0) != int(user.get("organization_id") or 0):
+        raise HTTPException(status_code=404, detail="Prospect not found")
+    if role == "salesperson" and int(row["assigned_salesperson_id"] or 0) != int(user["id"]):
+        raise HTTPException(status_code=404, detail="Prospect not found")
+    return row
 
 # Demo/production safety boundary. AcreFit's app data is server-rendered through
 # FastAPI/Postgres, so protect the application surface even where an individual
@@ -375,6 +441,9 @@ def save_seed_selection(field_id: int, req: SeedSelectionRequest):
 
 @app.post("/api/prospects")
 def create_prospect(req: ProspectCreateRequest, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
     farm_name = (req.farm_name or "").strip()
     main_contact = (req.main_contact or "").strip()
     state = (req.state or "").strip().upper()
@@ -388,39 +457,38 @@ def create_prospect(req: ProspectCreateRequest, request: Request):
     if not county:
         raise HTTPException(status_code=400, detail="County is required")
 
+    role = _role(user)
+    if role == "super_admin":
+        organization_id = int(req.organization_id)
+    else:
+        if user.get("organization_id") is None:
+            raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
+        organization_id = int(user["organization_id"])
+
     farm_key = f"manual:{uuid.uuid4().hex}"
-    user = _user(request)
-    organization_id = int(user["organization_id"]) if user and user.get("organization_id") is not None else int(req.organization_id)
     try:
         with connect() as conn:
             org = conn.execute(
-                "SELECT id FROM dealer_organizations WHERE id=? AND status='active'",
+                "SELECT id FROM dealer_organizations WHERE id=? AND status IN ('active','trial') AND access_enabled=true",
                 (organization_id,),
             ).fetchone()
             if not org:
                 raise HTTPException(status_code=400, detail="Dealer organization is unavailable")
+            assigned_salesperson_id = _resolve_salesperson(conn, user, organization_id, req.assigned_salesperson_id)
+            created_by_user_id = int(user["id"])
             if backend_name() == "supabase-postgres":
                 farm = conn.execute(
-                    "INSERT INTO farms(farm_key,farm_name,producer_name,state,county,organization_id,default_row_spacing,default_planting_window) VALUES(?,?,?,?,?,?,?,?) RETURNING id",
-                    (farm_key, farm_name, main_contact, state, county, organization_id, "NORMAL", "NORMAL"),
+                    "INSERT INTO farms(farm_key,farm_name,producer_name,state,county,organization_id,assigned_salesperson_id,created_by_user_id,default_row_spacing,default_planting_window) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                    (farm_key, farm_name, main_contact, state, county, organization_id, assigned_salesperson_id, created_by_user_id, "NORMAL", "NORMAL"),
                 ).fetchone()
                 farm_id = int(farm["id"])
                 prospect = conn.execute(
-                    "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json,organization_id) VALUES(?,?,?,?,?,'[]'::jsonb,'{\"created_from\":\"scratch\"}'::jsonb,?) RETURNING id",
-                    (farm_id, farm_name, "new", "manual_create", 0, organization_id),
+                    "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json,organization_id,assigned_salesperson_id,created_by_user_id) VALUES(?,?,?,?,?,'[]'::jsonb,'{\"created_from\":\"scratch\"}'::jsonb,?,?,?) RETURNING id",
+                    (farm_id, farm_name, "new", "manual_create", 0, organization_id, assigned_salesperson_id, created_by_user_id),
                 ).fetchone()
                 prospect_id = int(prospect["id"])
             else:
-                cur = conn.execute(
-                    "INSERT INTO farms(farm_key,farm_name,producer_name,state,county,default_row_spacing,default_planting_window) VALUES(?,?,?,?,?,?,?)",
-                    (farm_key, farm_name, main_contact, state, county, "NORMAL", "NORMAL"),
-                )
-                farm_id = int(cur.lastrowid)
-                cur = conn.execute(
-                    "INSERT INTO prospects(farm_id,prospect_name,status,source,total_acres,crops_json,metadata_json) VALUES(?,?,?,?,?,?,?)",
-                    (farm_id, farm_name, "new", "manual_create", 0, "[]", '{"created_from":"scratch"}'),
-                )
-                prospect_id = int(cur.lastrowid)
+                raise HTTPException(status_code=503, detail="Multi-user prospect ownership requires the production database")
         return {
             "id": prospect_id,
             "farm_id": farm_id,
@@ -430,6 +498,8 @@ def create_prospect(req: ProspectCreateRequest, request: Request):
             "state": state,
             "county": county,
             "source": "manual_create",
+            "assigned_salesperson_id": assigned_salesperson_id,
+            "created_by_user_id": created_by_user_id,
         }
     except HTTPException:
         raise
@@ -438,44 +508,91 @@ def create_prospect(req: ProspectCreateRequest, request: Request):
 
 
 @app.get("/api/prospects")
-def list_prospects():
+def list_prospects(request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
     try:
+        where_sql, params = _prospect_scope(user)
         with connect() as conn:
-            rows = conn.execute("SELECT p.*, f.producer_name, f.farm_name, (SELECT COUNT(*) FROM fields x WHERE x.farm_id=p.farm_id) AS unit_count, (SELECT COUNT(*) FROM field_soils fs JOIN fields x ON x.id=fs.field_id WHERE x.farm_id=p.farm_id) AS soil_ready_count FROM prospects p JOIN farms f ON f.id=p.farm_id ORDER BY p.updated_at DESC").fetchall()
+            rows = conn.execute(
+                "SELECT p.*, f.producer_name, f.farm_name, "
+                "u.display_name AS assigned_salesperson_name, u.email AS assigned_salesperson_email, "
+                "(SELECT COUNT(*) FROM fields x WHERE x.farm_id=p.farm_id) AS unit_count, "
+                "(SELECT COUNT(*) FROM field_soils fs JOIN fields x ON x.id=fs.field_id WHERE x.farm_id=p.farm_id) AS soil_ready_count "
+                "FROM prospects p JOIN farms f ON f.id=p.farm_id "
+                "LEFT JOIN platform_users u ON u.id=p.assigned_salesperson_id" +
+                where_sql +
+                " ORDER BY p.updated_at DESC",
+                params,
+            ).fetchall()
         result = rows_to_dicts(rows)
         for row in result:
             for key in ("crops_json", "metadata_json"):
                 if isinstance(row.get(key), str):
-                    try: row[key] = json.loads(row[key])
-                    except Exception: pass
+                    try:
+                        row[key] = json.loads(row[key])
+                    except Exception:
+                        pass
         return result
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Prospect database is temporarily unavailable.") from exc
 
+
 @app.get("/api/prospects/{prospect_id}")
-def get_prospect(prospect_id: int):
+def get_prospect(prospect_id: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
     with connect() as conn:
-        row = conn.execute("SELECT p.*, f.producer_name, f.farm_name FROM prospects p JOIN farms f ON f.id=p.farm_id WHERE p.id=?", (prospect_id,)).fetchone()
+        _require_prospect_access(conn, prospect_id, user)
+        row = conn.execute(
+            "SELECT p.*, f.producer_name, f.farm_name, u.display_name AS assigned_salesperson_name "
+            "FROM prospects p JOIN farms f ON f.id=p.farm_id "
+            "LEFT JOIN platform_users u ON u.id=p.assigned_salesperson_id WHERE p.id=?",
+            (prospect_id,),
+        ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Prospect not found")
     prospect = row_to_dict(row) or {}
     for key in ("crops_json", "metadata_json"):
         if isinstance(prospect.get(key), str):
-            try: prospect[key] = json.loads(prospect[key])
-            except Exception: pass
+            try:
+                prospect[key] = json.loads(prospect[key])
+            except Exception:
+                pass
     prospect["farm_context"] = build_farm_context(int(prospect["farm_id"]))
     prospect["soil_status"] = prospect_soil_status(prospect_id)
     return prospect
 
+
 @app.get("/api/prospects/{prospect_id}/soils")
-def get_prospect_soils(prospect_id: int):
-    try: return prospect_soil_status(prospect_id)
-    except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+def get_prospect_soils(prospect_id: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    with connect() as conn:
+        _require_prospect_access(conn, prospect_id, user)
+    try:
+        return prospect_soil_status(prospect_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
 
 @app.post("/api/prospects/{prospect_id}/soils/enrich")
-def enrich_prospect_soils(prospect_id: int, force: bool = False):
-    try: return enrich_prospect(prospect_id, force=force)
-    except Exception as exc: raise HTTPException(status_code=400, detail=f"Soil enrichment failed: {str(exc)[:220]}") from exc
+def enrich_prospect_soils(prospect_id: int, request: Request, force: bool = False):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    with connect() as conn:
+        _require_prospect_access(conn, prospect_id, user)
+    try:
+        return enrich_prospect(prospect_id, force=force)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Soil enrichment failed: {str(exc)[:220]}") from exc
+
 
 @app.post("/api/fields/{field_id}/soils/enrich")
 def enrich_one_field(field_id: int, force: bool = False):

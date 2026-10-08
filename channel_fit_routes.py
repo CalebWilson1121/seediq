@@ -667,6 +667,24 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             "maturity_window": maturity_window,
             "recommended_population": pop,
             "unit_size_seeds": p.get("unit_size_seeds"),
+            "list_price": p.get("list_price"),
+            "base_price": p.get("base_price"),
+            "dealer_cost": p.get("dealer_cost"),
+            "pricing_tier": p.get("pricing_tier"),
+            "farmer_price": (
+                round(max(
+                    0.0,
+                    float(p.get("base_price")) * (
+                        1.0 - (
+                            float(p.get("volume_discount_pct") or 0)
+                            + float(p.get("early_pay_discount_pct") or 0)
+                        ) / 100.0
+                    )
+                    - float(p.get("loyalty_discount_per_unit") or 0)
+                    - float(p.get("custom_discount_per_unit") or 0)
+                ), 2)
+                if p.get("base_price") is not None else None
+            ),
             "placement": p.get("placement_text"),
             "reasons": reasons[:8],
             "source_url": p.get("source_url"),
@@ -878,8 +896,18 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
             raise HTTPException(status_code=400, detail="Assign Corn or Soybeans to this field first")
         org_id = row.get("organization_id")
         products = rows_to_dicts(conn.execute(
-            "SELECT * FROM seed_products WHERE brand='Channel' AND active=true AND crop_year=? AND upper(crop)=? AND (organization_id=? OR ? IS NULL) ORDER BY relative_maturity,product_name",
-            (crop_year, crop, org_id, org_id),
+            "SELECT sp.*,dsp.list_price,dsp.base_price,dsp.dealer_cost,"
+            "COALESCE(fpp.volume_discount_pct,0) AS volume_discount_pct,"
+            "COALESCE(fpp.early_pay_discount_pct,0) AS early_pay_discount_pct,"
+            "COALESCE(fpp.loyalty_discount_per_unit,0) AS loyalty_discount_per_unit,"
+            "COALESCE(fpp.custom_discount_per_unit,0) AS custom_discount_per_unit,"
+            "fpp.pricing_tier "
+            "FROM seed_products sp "
+            "LEFT JOIN dealer_seed_prices dsp ON dsp.seed_product_id=sp.id AND dsp.organization_id=? AND dsp.crop_year=? AND dsp.status='active' "
+            "LEFT JOIN farmer_pricing_profiles fpp ON fpp.farm_id=? AND fpp.crop_year=? "
+            "WHERE sp.brand='Channel' AND sp.active=true AND sp.crop_year=? AND upper(sp.crop)=? "
+            "AND (sp.organization_id=? OR ? IS NULL) ORDER BY sp.relative_maturity,sp.product_name",
+            (org_id, crop_year, row.get("farm_id"), crop_year, crop_year, crop, org_id, org_id),
         ).fetchall())
     row_dict = dict(row)
     production_context = _production_context(field_id, crop)
@@ -928,9 +956,21 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
             (req.crop_year, farm_id),
         ).fetchall())
         all_products = rows_to_dicts(conn.execute(
-            "SELECT * FROM seed_products WHERE brand='Channel' AND active=true AND crop_year=? AND (organization_id=? OR ? IS NULL) ORDER BY crop,relative_maturity,product_name",
-            (req.crop_year, farm.get("organization_id"), farm.get("organization_id")),
+            "SELECT sp.*,dsp.list_price,dsp.base_price,dsp.dealer_cost "
+            "FROM seed_products sp "
+            "LEFT JOIN dealer_seed_prices dsp ON dsp.seed_product_id=sp.id AND dsp.organization_id=? AND dsp.crop_year=? AND dsp.status='active' "
+            "WHERE sp.brand='Channel' AND sp.active=true AND sp.crop_year=? AND (sp.organization_id=? OR ? IS NULL) "
+            "ORDER BY sp.crop,sp.relative_maturity,sp.product_name",
+            (farm.get("organization_id"), req.crop_year, req.crop_year, farm.get("organization_id"), farm.get("organization_id")),
         ).fetchall())
+        profile = conn.execute(
+            "SELECT volume_discount_pct,early_pay_discount_pct,loyalty_discount_per_unit,custom_discount_per_unit,pricing_tier "
+            "FROM farmer_pricing_profiles WHERE farm_id=? AND crop_year=?",
+            (farm_id, req.crop_year),
+        ).fetchone()
+        profile = dict(profile) if profile else {}
+        for p in all_products:
+            p.update(profile)
         products_by_crop: dict[str, list[dict[str, Any]]] = {"CORN": [], "SOYBEANS": []}
         for p in all_products:
             c = _normalize_crop(p.get("crop"))
@@ -989,7 +1029,7 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
             unit_size = int(top.get("unit_size_seeds") or (80000 if crop == "CORN" else 140000))
             acres = float(row.get("acres") or 0)
             units_required = acres * population / unit_size if unit_size else None
-            price = row.get("seed_price_per_unit")
+            price = top.get("farmer_price")
             cost_per_acre = (population / unit_size) * float(price) if price is not None and unit_size else None
             total_cost = units_required * float(price) if price is not None and units_required is not None else None
             if not row.get("crop_plan_id"):
@@ -998,8 +1038,13 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
                     (row["field_id"], req.crop_year, crop, "channel_auto_plan", "planning"),
                 )
             conn.execute(
-                "UPDATE field_crop_plans SET crop=?,yield_goal=COALESCE(yield_goal,?),selected_seed_product_id=?,target_population=?,seeds_per_unit=?,units_required=?,seed_cost_per_acre=?,total_seed_cost=?,status='seed_selected',updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
-                (crop, row.get("yield_goal"), top["seed_product_id"], population, unit_size, round(units_required, 3) if units_required is not None else None,
+                "UPDATE field_crop_plans SET crop=?,yield_goal=COALESCE(yield_goal,?),selected_seed_product_id=?,target_population=?,"
+                "seed_price_per_unit=?,pricing_source=?,seeds_per_unit=?,units_required=?,seed_cost_per_acre=?,total_seed_cost=?,"
+                "status='seed_selected',updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
+                (crop, row.get("yield_goal"), top["seed_product_id"], population,
+                 round(float(price), 2) if price is not None else None,
+                 "farmer_pricing_profile" if price is not None else None,
+                 unit_size, round(units_required, 3) if units_required is not None else None,
                  round(cost_per_acre, 2) if cost_per_acre is not None else None,
                  round(total_cost, 2) if total_cost is not None else None,
                  row["field_id"], req.crop_year),

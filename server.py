@@ -100,6 +100,22 @@ def _database_status() -> str:
         return "error"
 
 def _user(request: Request):
+    if os.getenv("ACREFIT_DEMO_MODE") == "1":
+        demo_role = request.cookies.get("acrefit_demo_role")
+        demo_ids = {"super_admin": 1, "dealer_admin": 2, "salesperson": 3}
+        demo_user_id = demo_ids.get(demo_role or "")
+        if demo_user_id:
+            with connect() as conn:
+                row = conn.execute(
+                    "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.organization_id,u.sales_enabled,"
+                    "o.name AS organization_name,o.status AS organization_status,o.access_enabled "
+                    "FROM platform_users u LEFT JOIN dealer_organizations o ON o.id=u.organization_id WHERE u.id=?",
+                    (demo_user_id,),
+                ).fetchone()
+            if row and row["status"] == "active":
+                result = dict(row)
+                result["role"] = _role(result)
+                return result
     return current_user(request.cookies.get(SESSION_COOKIE))
 
 def _require(request: Request, *roles: str):
@@ -296,6 +312,9 @@ def _enforce_record_path_access(path: str, user: dict) -> None:
 _PUBLIC_EXACT_PATHS = {
     "/login.html",
     "/api/auth/login",
+    "/api/auth/demo-role/super_admin",
+    "/api/auth/demo-role/dealer_admin",
+    "/api/auth/demo-role/salesperson",
     "/api/auth/logout",
     "/api/health",
     "/farmer-proposal",
@@ -367,10 +386,21 @@ def auth_login(req: LoginRequest, response: Response):
     response.set_cookie(SESSION_COOKIE, result.pop("token"), max_age=7*24*3600, httponly=True, secure=True, samesite="lax", path="/")
     return result
 
+@app.post("/api/auth/demo-role/{role}")
+def auth_demo_role(role: str, response: Response):
+    if os.getenv("ACREFIT_DEMO_MODE") != "1":
+        raise HTTPException(status_code=404, detail="Not found")
+    allowed = {"super_admin", "dealer_admin", "salesperson"}
+    if role not in allowed:
+        raise HTTPException(status_code=404, detail="Unknown demo role")
+    response.set_cookie("acrefit_demo_role", role, max_age=12*3600, httponly=True, secure=True, samesite="lax", path="/")
+    return {"ok": True, "role": role}
+
 @app.post("/api/auth/logout")
 def auth_logout(request: Request, response: Response):
     logout(request.cookies.get(SESSION_COOKIE))
     response.delete_cookie(SESSION_COOKIE, path="/")
+    response.delete_cookie("acrefit_demo_role", path="/")
     return {"ok": True}
 
 @app.get("/api/auth/me")

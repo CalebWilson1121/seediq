@@ -1,125 +1,91 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>AcreFit — Sales Pipeline</title>
-<meta name="description" content="Opportunity and territory visibility" />
 <style>
-:root{
-    --bg:#f4f7f2; --panel:#ffffff; --ink:#162319; --muted:#6b776d; --line:#dfe7df;
-    --green:#1f6f43; --green2:#2f8f5b; --lime:#dff2e5; --gold:#c9992d; --red:#b94a48;
-    --shadow:0 14px 35px rgba(26,53,36,.10);
-  }
-  *{box-sizing:border-box}
-  body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
-  .app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
-  .sidebar{background:#102a1d;color:white;padding:22px 18px;position:sticky;top:0;height:100vh}
-  .brand{font-weight:800;font-size:25px;letter-spacing:-.5px}.brand span{color:#8fd39f}
-  .subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}
-  nav{margin-top:30px;display:grid;gap:8px}
-  nav a{display:block;width:100%;border:0;background:transparent;color:#dce8df;text-align:left;padding:12px 13px;border-radius:10px;font-size:14px;cursor:pointer;text-decoration:none}
-  nav a.active,nav a:hover{background:#1d4b33;color:white}
-  .side-card{margin-top:28px;background:#173c29;border:1px solid #2a6041;border-radius:14px;padding:14px;font-size:12px;color:#cfe0d4}
-  .main{padding:26px 30px 45px}
-  .topbar{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:22px}
-  h1,h2,h3,p{margin-top:0}h1{font-size:28px;margin-bottom:5px}h2{font-size:20px}h3{font-size:15px}
-  .muted{color:var(--muted)}
-  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:white;border-radius:999px;padding:8px 12px;font-size:12px}
-  .dot{width:8px;height:8px;background:#43a66d;border-radius:50%}
-  .grid{display:grid;gap:16px}.kpis{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 2px 10px rgba(25,45,32,.03)}
-  .kpi strong{display:block;font-size:27px;margin-top:5px}.kpi span{font-size:12px;color:var(--muted)}
-  .cols{grid-template-columns:1.25fr .75fr}.cols2{grid-template-columns:1fr 1fr}.cols3{grid-template-columns:repeat(3,1fr)}
-  .table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--line);font-size:13px}.table th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}.table tr:last-child td{border-bottom:0}
-  .btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}.btn.primary{background:var(--green);color:white}.btn.secondary{background:#eaf2ed;color:#17452d}.btn.outline{background:white;border:1px solid var(--line);color:var(--ink)}
-  .field-list{display:grid;gap:10px}.field{padding:13px;border:1px solid var(--line);border-radius:12px;cursor:pointer;background:#fff}.field.active{border:2px solid var(--green);background:#f7fbf8}.field .row{display:flex;justify-content:space-between;gap:8px}
-  .map{height:315px;border-radius:16px;background:linear-gradient(135deg,#dce8d2,#a8c397);position:relative;overflow:hidden;border:1px solid #c8d7c4}
-  .map:before,.map:after{content:"";position:absolute;border:2px solid rgba(255,255,255,.65);background:rgba(74,130,75,.22);transform:rotate(-7deg)}
-  .map:before{width:200px;height:130px;left:70px;top:70px;border-radius:22px}.map:after{width:150px;height:95px;right:55px;bottom:50px;border-radius:30px}
-  .map-label{position:absolute;left:24px;bottom:18px;background:rgba(16,42,29,.88);color:white;padding:10px 12px;border-radius:10px;font-size:12px}
-  .riskbar{margin:10px 0}.riskrow{display:grid;grid-template-columns:135px 1fr 38px;gap:10px;align-items:center;font-size:12px}.bar{height:8px;background:#e8eee9;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#72b88d,#256d45);border-radius:999px}
-  .recommendation{border:1px solid var(--line);border-radius:14px;padding:15px;margin-top:12px}.recommendation.top{border:2px solid var(--green);background:#fbfefc}.rec-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.score{background:var(--lime);color:#164d31;border-radius:12px;padding:8px 10px;text-align:center;min-width:76px}.score b{font-size:21px;display:block}.tag{display:inline-block;font-size:10px;font-weight:700;padding:5px 8px;border-radius:999px;background:#eef4f0;margin:3px 4px 0 0}.good{background:#e4f5e9;color:#1c6c3d}.warn{background:#fff2d9;color:#8d6517}.danger{background:#fde8e7;color:#9c3735}
-  .chat{background:#f7faf8;border:1px solid var(--line);border-radius:14px;padding:15px}.chat .bubble{background:white;border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin-top:10px;font-size:13px;line-height:1.45}.chat .prompt{color:#1e5d3b;font-weight:700}
-  .hidden{display:none!important}.section{display:none}.section.active{display:block}
-  .farm-plan{display:grid;grid-template-columns:1fr 1fr;gap:15px}.donut{width:170px;height:170px;border-radius:50%;background:conic-gradient(#245f3d 0 30%,#4d8c64 30% 53%,#79a987 53% 72%,#b2c8aa 72% 86%,#d8e2d2 86%);margin:auto;position:relative}.donut:after{content:"2,860 acres";position:absolute;inset:34px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;text-align:center;padding:10px}
-  .timeline{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.step{border:1px solid var(--line);padding:12px;border-radius:12px;background:#fff}.step b{display:block;margin-bottom:4px}.step small{color:var(--muted)}
-  .footer-note{font-size:11px;color:#7a867d;margin-top:18px}
-  .logo-row{display:flex;align-items:center;gap:10px}.avatar{width:36px;height:36px;border-radius:50%;background:#d9e9df;display:grid;place-items:center;font-weight:800;color:#1d5737}
-
-  .hero{background:linear-gradient(135deg,#123822,#1f6f43);color:white;border-radius:18px;padding:22px;box-shadow:var(--shadow)}
-  .hero h1,.hero h2,.hero h3{color:white}.hero .muted{color:#c9ddcf}
-  .split-kpi{display:flex;justify-content:space-between;align-items:flex-end;gap:10px}
-  .big-num{font-size:34px;font-weight:800;letter-spacing:-1px}
-  .mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.mini{padding:12px;border:1px solid var(--line);border-radius:12px;background:#fbfdfb}
-  .packet-page{background:white;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 8px 20px rgba(25,45,32,.06);position:relative;overflow:hidden}.packet-page:before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--green)}
-  .packet-cover{min-height:330px;display:flex;flex-direction:column;justify-content:space-between;background:linear-gradient(135deg,#f4faf5,#e2efe5)}
-  .packet-brand{font-weight:800;font-size:30px;color:var(--green)}
-  .metric-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{background:#f7faf8;border:1px solid var(--line);padding:12px;border-radius:12px}.metric b{display:block;font-size:20px}
-  .status{font-size:10px;font-weight:800;padding:5px 8px;border-radius:999px;display:inline-block}.status.hot{background:#fde8e7;color:#963c39}.status.warm{background:#fff0d2;color:#855f14}.status.sent{background:#e7f2ff;color:#2f5f91}.status.won{background:#e4f5e9;color:#1c6c3d}
-  .input,.select,.textarea{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:9px;background:white;font:inherit}.textarea{min-height:90px;resize:vertical}.label{display:block;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
-  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid .full{grid-column:1/-1}
-  .opp-card{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px;background:white}.opp-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-  .callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0;font-size:13px;line-height:1.5}
-
-  @media(max-width:950px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.kpis,.cols,.cols2,.cols3,.farm-plan{grid-template-columns:1fr}.timeline,.metric-row,.mini-grid,.form-grid{grid-template-columns:1fr 1fr}.main{padding:18px}.sidebar nav{grid-template-columns:repeat(3,1fr)}}
-
+:root{--bg:#f4f7f2;--panel:#fff;--ink:#162319;--muted:#6b776d;--line:#dfe7df;--green:#1f6f43;--dark:#102a1d;--lime:#dff2e5;--gold:#fff0d2;--blue:#e7f2ff;--red:#fde8e7}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{background:var(--dark);color:#fff;padding:22px 18px;position:sticky;top:0;height:100vh}
+.brand{font-weight:800;font-size:25px}.subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}nav{margin-top:28px;display:grid;gap:7px}
+nav a{color:#dce8df;text-decoration:none;padding:11px 12px;border-radius:10px;font-size:14px}nav a:hover,nav a.active{background:#1d4b33;color:#fff}
+.side-card{margin-top:26px;background:#173c29;border:1px solid #2a6041;border-radius:14px;padding:14px;font-size:12px;color:#cfe0d4}
+.main{padding:28px 32px 45px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}.eyebrow{font-size:11px;font-weight:850;letter-spacing:.07em;text-transform:uppercase;color:var(--green)}
+h1{margin:5px 0 5px;font-size:30px}h2{margin:0 0 12px}.muted{color:var(--muted)}.pill{display:inline-flex;align-items:center;border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 12px;font-size:12px;font-weight:750}
+.grid{display:grid;gap:15px}.kpis{grid-template-columns:repeat(4,1fr);margin-top:20px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}
+.kpi span{font-size:12px;color:var(--muted)}.kpi strong{display:block;font-size:29px;margin-top:4px}.cols{grid-template-columns:minmax(0,1.5fr) minmax(280px,.5fr);margin-top:16px}
+.opp{border:1px solid var(--line);border-radius:13px;padding:14px;margin-top:10px;background:#fff;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.opp h3{margin:0 0 5px;font-size:16px}.tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.tag{font-size:10px;font-weight:850;padding:5px 8px;border-radius:999px;background:#eef4f0}
+.status-new{background:#eef4f0}.status-hot{background:var(--red);color:#963c39}.status-proposal_ready{background:var(--blue);color:#2f5f91}.status-won{background:var(--lime);color:#1c6c3d}
+.btn{display:inline-block;border:0;border-radius:9px;padding:9px 12px;background:var(--green);color:#fff;text-decoration:none;font-weight:800;cursor:pointer}.btn.secondary{background:#eaf2ed;color:#17452d}
+.table{width:100%;border-collapse:collapse}.table th,.table td{text-align:left;padding:10px 7px;border-bottom:1px solid var(--line);font-size:12px}.table th{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+.empty{padding:30px;text-align:center;color:var(--muted)}.scope{background:#f5faf6;border:1px solid #cfe0d4;border-radius:12px;padding:12px;font-size:13px;line-height:1.5}
+@media(max-width:950px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.kpis,.cols{grid-template-columns:1fr}.main{padding:18px}}
 </style>
-<link rel="icon" href="/acrefit-icon.svg"></head>
+<link rel="icon" href="/acrefit-icon.svg">
+</head>
 <body>
 <div class="app">
-  <aside class="sidebar">
-    <div class="brand"><img src="/acrefit-logo-light.svg" alt="AcreFit" style="height:42px;width:auto;max-width:195px;display:block"></div>
-    <div class="subbrand">Field Intelligence & Seed Sales Platform</div>
-    <nav><a href="index.html" class="">Dashboard</a>
-<a href="farmers.html" class="">Farmer & Fields</a>
-<a href="field-analysis.html" class="">Field Analysis</a>
-<a href="whole-farm-plan.html" class="">Whole-Farm Plan</a>
-<a href="genetics.html" class="">Seed Genetics</a>
-<a href="prospects.html" class="">Prospect Intelligence</a>
-<a href="sales-packet.html" class="">Sales Packet Builder</a>
-<a href="pipeline.html" class="active">Sales Pipeline</a>
-<a href="data-hub.html" class="">Farm Data Hub</a>
-<a href="product-spec.html" class="">Product Spec</a></nav>
-    <div class="side-card"><b>Interactive Prototype</b><br><br>All farmer, soil, weather, hybrid, pipeline and performance data in this demo is fictional sample data.</div>
-  </aside>
-  <main class="main">
-    <div class="topbar"><div><div class="muted" style="font-size:12px">Prairie Ridge Seed • Sales Intelligence</div></div><div class="logo-row"><span class="pill"><i class="dot"></i> Engine Online</span><div class="avatar">MH</div></div></div>
-    <div class="workflow"><span class="muted" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em">Workflow</span><a href="prospects.html" class="">Prospect</a><span class="muted">›</span><a href="farmers.html" class="">Farm & Fields</a><span class="muted">›</span><a href="field-analysis.html" class="">Analyze</a><span class="muted">›</span><a href="whole-farm-plan.html" class="">Plan</a><span class="muted">›</span><a href="sales-packet.html" class="">Proposal</a><span class="muted">›</span><a href="pipeline.html" class="current">Pipeline</a></div>
-    <section class="page-section" id="pipeline">
-<h1>Seed Sales Pipeline</h1>
-<p class="muted">Every prospect packet becomes a trackable opportunity for the rep and sales leadership.</p>
+<aside class="sidebar">
+<div class="brand"><img src="/acrefit-logo-light.svg" alt="AcreFit" style="height:42px;width:auto;max-width:195px;display:block"></div>
+<div class="subbrand">Field Intelligence & Seed Sales Platform</div>
+<nav>
+<a href="index.html">Dashboard</a><a href="farmers.html">Farmer & Fields</a><a href="field-analysis.html">Field Analysis</a><a href="whole-farm-plan.html">Whole-Farm Plan</a><a href="genetics.html">Seed Genetics</a><a href="prospects.html">Prospect Intelligence</a><a href="sales-packet.html">Sales Packet Builder</a><a href="pipeline.html" class="active">Sales Pipeline</a><a href="data-hub.html">Farm Data Hub</a>
+</nav>
+<div class="side-card" id="sideScope"><b>Loading access scope…</b></div>
+</aside>
+<main class="main">
+<div class="top"><div><div class="eyebrow" id="scopeLabel">Sales Pipeline</div><h1 id="title">Loading pipeline…</h1><div class="muted" id="subtitle">AcreFit is loading the opportunities available to your account.</div></div><div class="pill" id="who">Signed in</div></div>
 <div class="grid kpis">
-<div class="card kpi"><span>Open Opportunities</span><strong>38</strong><span>24,860 acres</span></div>
-<div class="card kpi"><span>Packets Sent</span><strong>21</strong><span>Last 90 days</span></div>
-<div class="card kpi"><span>Projected Bags</span><strong>7,940</strong><span>Open pipeline</span></div>
-<div class="card kpi"><span>Won Acres</span><strong>6,420</strong><span>Sample quarter</span></div>
+<div class="card kpi"><span>Visible Opportunities</span><strong id="openCount">—</strong></div>
+<div class="card kpi"><span>Visible Acres</span><strong id="openAcres">—</strong></div>
+<div class="card kpi"><span>Proposal Ready</span><strong id="proposalCount">—</strong></div>
+<div class="card kpi"><span>Won Acres</span><strong id="wonAcres">—</strong></div>
 </div>
 <div class="grid cols">
-<div class="card">
-<h2>My Opportunities</h2>
-<div class="opp-card"><div class="opp-top"><div><b>Anderson Family Farms</b><div class="muted" style="font-size:12px">2,480 corn acres • Marshall County, KS</div></div><span class="status hot">HOT</span></div><div class="split-kpi" style="margin-top:12px"><div><small class="muted">Estimated bags</small><b style="display:block">992</b></div><div><small class="muted">Est. retail value</small><b style="display:block">$272k</b></div><div><small class="muted">Next step</small><b style="display:block">Farm meeting</b></div></div></div>
-<div class="opp-card"><div class="opp-top"><div><b>Roehr Farms</b><div class="muted" style="font-size:12px">1,760 corn acres • Nemaha County, KS</div></div><span class="status sent">PACKET SENT</span></div><div class="split-kpi" style="margin-top:12px"><div><small class="muted">Estimated bags</small><b style="display:block">704</b></div><div><small class="muted">Est. retail value</small><b style="display:block">$194k</b></div><div><small class="muted">Next step</small><b style="display:block">Follow-up</b></div></div></div>
-<div class="opp-card"><div class="opp-top"><div><b>Blue River Ag</b><div class="muted" style="font-size:12px">3,120 corn acres • Washington County, KS</div></div><span class="status warm">WARM</span></div><div class="split-kpi" style="margin-top:12px"><div><small class="muted">Estimated bags</small><b style="display:block">1,248</b></div><div><small class="muted">Est. retail value</small><b style="display:block">$343k</b></div><div><small class="muted">Next step</small><b style="display:block">Map fields</b></div></div></div>
+<div class="card"><h2 id="oppHeading">Opportunities</h2><div id="opportunities"><div class="empty">Loading opportunities…</div></div></div>
+<div class="card"><h2>Pipeline Snapshot</h2><div id="snapshot"></div><div class="scope" id="scopeNote" style="margin-top:14px"></div></div>
 </div>
-<div class="card">
-<h2>Leadership View</h2>
-<table class="table"><thead><tr><th>Rep</th><th>Prospect Acres</th><th>Packets</th><th>Won</th></tr></thead><tbody>
-<tr><td>Megan Hart</td><td>8,420</td><td>7</td><td>2,180 ac</td></tr>
-<tr><td>Ryan Cole</td><td>6,780</td><td>5</td><td>1,640 ac</td></tr>
-<tr><td>Ashley Grant</td><td>5,960</td><td>4</td><td>1,420 ac</td></tr>
-<tr><td>Ben Morris</td><td>3,700</td><td>5</td><td>1,180 ac</td></tr>
-</tbody></table>
-<div class="callout" style="margin-top:14px"><b>Enterprise value:</b> sales leadership can see prospect acres analyzed, packets generated, projected bags, product mix and outcomes across the territory.</div>
-</div>
-</div>
-</section>
-    <p class="footer-note">AcreFit prototype • All data shown is fictional/sample data for product-concept discussion only.</p>
-  </main>
-</div>
+</main></div>
 <script>
-document.querySelectorAll('[data-print]').forEach(btn=>btn.addEventListener('click',()=>window.print()));
-
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const nice=s=>String(s||'new').replaceAll('_',' ').replace(/\b\w/g,m=>m.toUpperCase());
+function roleCopy(me){
+  if(me.role==='super_admin')return {title:'AcreFit Network Pipeline',heading:'All Visible Opportunities',scope:'Super Admin',note:'You can see every dealership and salesperson pipeline in AcreFit.'};
+  if(me.role==='dealer_admin')return {title:'Dealership Sales Pipeline',heading:'Dealership Opportunities',scope:'Dealer Admin',note:'You can see every opportunity owned by salespeople inside your dealership.'};
+  return {title:'My Sales Pipeline',heading:'My Opportunities',scope:'Salesperson',note:'You only see prospects and sales opportunities assigned to you. Other reps\' pipelines are not returned to your account.'};
+}
+async function api(path){const r=await fetch(path);let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.detail||('HTTP '+r.status));return d}
+async function boot(){
+  try{
+    const [me,ps]=await Promise.all([api('/api/auth/me'),api('/api/prospects')]);
+    const copy=roleCopy(me);
+    document.getElementById('title').textContent=copy.title;
+    document.getElementById('oppHeading').textContent=copy.heading;
+    document.getElementById('scopeLabel').textContent=copy.scope+' • '+(me.organization_name||'W5 / AcreFit');
+    document.getElementById('subtitle').textContent='Live pipeline data is filtered by your signed-in AcreFit role and record ownership.';
+    document.getElementById('who').textContent=(me.display_name||me.email)+' • '+copy.scope;
+    document.getElementById('sideScope').innerHTML='<b>'+esc(copy.scope)+'</b><br><br>'+esc(copy.note);
+    document.getElementById('scopeNote').innerHTML='<b>Access rule:</b> '+esc(copy.note);
+    const visible=ps.filter(p=>String(p.status||'').toLowerCase()!=='won');
+    document.getElementById('openCount').textContent=visible.length.toLocaleString();
+    document.getElementById('openAcres').textContent=Math.round(visible.reduce((s,p)=>s+Number(p.total_acres||0),0)).toLocaleString();
+    document.getElementById('proposalCount').textContent=ps.filter(p=>String(p.status||'').toLowerCase()==='proposal_ready').length.toLocaleString();
+    document.getElementById('wonAcres').textContent=Math.round(ps.filter(p=>String(p.status||'').toLowerCase()==='won').reduce((s,p)=>s+Number(p.total_acres||0),0)).toLocaleString();
+    document.getElementById('opportunities').innerHTML=ps.length?ps.map(p=>`
+      <div class="opp"><div><h3>${esc(p.prospect_name)}</h3>
+      <div class="muted">${Number(p.total_acres||0).toLocaleString()} acres • ${p.unit_count||0} fields</div>
+      <div class="tags"><span class="tag status-${esc(String(p.status||'new').toLowerCase())}">${esc(nice(p.status))}</span>
+      ${p.assigned_salesperson_name?'<span class="tag">Rep: '+esc(p.assigned_salesperson_name)+'</span>':''}</div></div>
+      <a class="btn" href="prospect-detail.html?id=${p.id}">Open</a></div>`).join(''):'<div class="empty">No opportunities are assigned to this account yet.</div>';
+    const by={};ps.forEach(p=>{const k=nice(p.status);by[k]=(by[k]||0)+1});
+    const rows=Object.entries(by).sort((a,b)=>b[1]-a[1]);
+    document.getElementById('snapshot').innerHTML=rows.length?'<table class="table"><thead><tr><th>Stage</th><th>Count</th></tr></thead><tbody>'+rows.map(([k,v])=>'<tr><td>'+esc(k)+'</td><td><b>'+v+'</b></td></tr>').join('')+'</tbody></table>':'<div class="empty">No pipeline data yet.</div>';
+  }catch(e){
+    document.getElementById('title').textContent='Pipeline unavailable';
+    document.getElementById('opportunities').innerHTML='<div class="empty">'+esc(e.message)+'</div>';
+  }
+}
+boot();
 </script>
-</body>
-</html>
+</body></html>

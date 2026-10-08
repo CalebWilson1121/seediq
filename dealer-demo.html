@@ -17,7 +17,7 @@ nav{display:grid;gap:7px;margin-top:28px}nav a{color:#dce8df;text-decoration:non
 <body><div class="app"><aside class="side">
 <img src="/acrefit-logo-light.svg" alt="AcreFit" style="height:42px;width:auto;max-width:195px;display:block">
 <div id="sideTitle" style="margin-top:18px;font-weight:800">Dealer Management</div><div id="sideScope" class="scope"></div>
-<nav><a class="active" href="#" onclick="window.scrollTo({top:0,behavior:'smooth'});return false">Dashboard</a><a href="#team">Sales Team</a><a id="myBookNav" href="#" style="display:none">My Book</a><a id="prospectsNav" href="/prospects.html">Prospects</a><a id="pipelineNav" href="/pipeline.html">Sales Pipeline</a><a id="geneticsNav" href="/genetics.html">Seed Catalogs</a><a id="dataHubNav" href="/data-hub.html">Farm Data Hub</a></nav>
+<nav><a class="active" href="#" onclick="window.scrollTo({top:0,behavior:'smooth'});return false">Dashboard</a><a href="#team">Sales Team</a><a id="myBookNav" href="#" style="display:none">My Book</a><a id="prospectsNav" href="/prospects.html">Prospects</a><a id="pipelineNav" href="/pipeline.html">Sales Pipeline</a><a id="geneticsNav" href="/genetics.html">Seed Catalogs</a><a id="pricingNav" href="/pricing.html">Seed Pricing</a><a id="dataHubNav" href="/data-hub.html">Farm Data Hub</a></nav>
 <button id="logout" class="btn alt" style="margin-top:18px">Sign out</button>
 </aside><main class="main">
 <div class="hero"><div style="font-size:11px;font-weight:850;letter-spacing:.07em">DEALER BUSINESS INTELLIGENCE</div><div class="row"><div><h1 id="dealerName" style="margin:7px 0">Loading…</h1><p style="margin:0">Sales team, acres, pipeline, proposals and seed-unit performance in one management view.</p></div><label style="min-width:150px"><div class="small">Crop Year</div><select id="year" class="select"><option>2026</option><option selected>2027</option><option>2028</option><option>2029</option></select></label></div></div>
@@ -83,6 +83,7 @@ async function load(){
    prospectsNav.href='/prospects.html?organization_id='+orgId;
    pipelineNav.href='/pipeline.html?organization_id='+orgId;
    geneticsNav.href='/genetics.html?organization_id='+orgId;
+   pricingNav.href='/pricing.html?organization_id='+orgId;
    dataHubNav.href='/data-hub.html?organization_id='+orgId;
  }
  await Promise.all([loadDashboard(),loadTeam()]);

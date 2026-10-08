@@ -100,12 +100,6 @@ def save_field_seed_plan(field_id: int, req: FieldSeedPlanRequest):
         ).fetchone()
     result = row_to_dict(row) or {}
     result["sold_units"] = econ["sold_units"]
-    if result.get("selected_seed_product_id"):
-        try:
-            result["standard_pricing"] = calculated_farmer_price(int(field["id"] and conn.execute("SELECT farm_id FROM fields WHERE id=?", (field_id,)).fetchone()["farm_id"]), req.crop_year, int(result["selected_seed_product_id"]))
-        except Exception:
-            result["standard_pricing"] = None
-        result["price_request"] = latest_field_price_request(field_id, req.crop_year)
     return result
 
 

@@ -258,6 +258,35 @@ def set_dealer_team_user_access(organization_id: int, user_id: int, enabled: boo
     return set_user_access(user_id, enabled, actor_user_id)
 
 
+def reset_dealer_team_user_password(organization_id: int, user_id: int, actor_user_id: int) -> dict[str, Any]:
+    with connect() as conn:
+        target = conn.execute(
+            "SELECT id,email,display_name,organization_id,global_role,status FROM platform_users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+        if not target or int(target["organization_id"] or 0) != int(organization_id):
+            raise KeyError("Dealer user not found")
+        temp_password = _temporary_password()
+        salt = secrets.token_hex(16)
+        password_hash = _password_hash(temp_password, salt)
+        conn.execute(
+            "UPDATE platform_users SET password_salt=?,password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (salt, password_hash, user_id),
+        )
+        conn.execute("DELETE FROM user_sessions WHERE user_id=?", (user_id,))
+        conn.execute(
+            "INSERT INTO admin_audit_log(actor_user_id,action,entity_type,entity_id,details_json) "
+            "VALUES(?,?,?,?,?::jsonb)",
+            (actor_user_id, "dealer_user_password_reset", "platform_user", str(user_id), '{"temporary_password_issued":true}'),
+        )
+    return {
+        "id": target["id"],
+        "email": target["email"],
+        "display_name": target["display_name"],
+        "temporary_password": temp_password,
+    }
+
+
 def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None = None) -> dict[str, Any]:
     with connect() as conn:
         org = conn.execute("SELECT id,name,status,access_enabled,license_end,max_seats FROM dealer_organizations WHERE id=?", (organization_id,)).fetchone()

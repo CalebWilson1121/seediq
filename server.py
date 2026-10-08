@@ -122,6 +122,8 @@ def _resolve_salesperson(conn, user: dict, organization_id: int, requested_id: i
     if role == "salesperson":
         if int(user.get("organization_id") or 0) != int(organization_id):
             raise HTTPException(status_code=403, detail="Salespeople can only create records in their own dealership")
+        if not bool(user.get("sales_enabled")):
+            raise HTTPException(status_code=403, detail="This account does not have an active sales book")
         return int(user["id"])
     if requested_id is not None:
         target = conn.execute(

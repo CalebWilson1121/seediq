@@ -366,10 +366,20 @@ def dealer_salesperson_profile(organization_id: int, user_id: int, crop_year: in
             "(SELECT COUNT(*) FROM fields ff WHERE ff.farm_id=f.id) AS field_count,"
             "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id "
             " WHERE ff.farm_id=f.id AND cp.crop_year=?) AS seed_units,"
+            "(SELECT COALESCE(SUM(cp.total_seed_cost),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id "
+            " WHERE ff.farm_id=f.id AND cp.crop_year=?) AS proposed_revenue,"
+            "(SELECT COALESCE(SUM(CASE WHEN dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL AND cp.total_seed_cost IS NOT NULL "
+            " THEN cp.total_seed_cost-(cp.units_required*dsp.dealer_cost) ELSE 0 END),0) "
+            " FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id "
+            " LEFT JOIN dealer_seed_prices dsp ON dsp.organization_id=? AND dsp.crop_year=cp.crop_year "
+            " AND dsp.seed_product_id=cp.selected_seed_product_id AND dsp.status='active' "
+            " WHERE ff.farm_id=f.id AND cp.crop_year=?) AS gross_margin,"
+            "(SELECT COUNT(*) FROM price_approval_requests r WHERE r.farm_id=f.id AND r.crop_year=? "
+            " AND r.requested_by_user_id=? AND r.status<>'superseded') AS price_override_count,"
             "(SELECT COUNT(*) FROM seed_proposals sp WHERE sp.prospect_id=p.id AND sp.crop_year=?) AS proposal_count "
             "FROM prospects p JOIN farms f ON f.id=p.farm_id "
             "WHERE p.organization_id=? AND p.assigned_salesperson_id=? ORDER BY p.updated_at DESC",
-            (crop_year, crop_year, organization_id, user_id),
+            (crop_year, crop_year, organization_id, crop_year, crop_year, user_id, crop_year, organization_id, user_id),
         ).fetchall())
 
         totals = conn.execute(
@@ -386,9 +396,23 @@ def dealer_salesperson_profile(organization_id: int, user_id: int, crop_year: in
             "COALESCE(SUM(CASE WHEN upper(cp.crop)='CORN' THEN cp.units_required ELSE 0 END),0) AS corn_units,"
             "COALESCE(SUM(CASE WHEN upper(cp.crop) IN ('SOY','SOYBEANS','SOYBEAN') THEN cp.units_required ELSE 0 END),0) AS soybean_units,"
             "COALESCE(SUM(cp.total_seed_cost),0) AS seed_value,"
+            "COALESCE(SUM(CASE WHEN dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL AND cp.total_seed_cost IS NOT NULL "
+            "THEN cp.total_seed_cost-(cp.units_required*dsp.dealer_cost) ELSE 0 END),0) AS gross_margin,"
+            "COALESCE(SUM(CASE WHEN lower(p.status)='won' AND dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL AND cp.total_seed_cost IS NOT NULL "
+            "THEN cp.total_seed_cost-(cp.units_required*dsp.dealer_cost) ELSE 0 END),0) AS won_gross_margin,"
             "COUNT(DISTINCT CASE WHEN cp.selected_seed_product_id IS NOT NULL THEN cp.field_id END) AS fields_with_seed "
             "FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id "
+            "LEFT JOIN prospects p ON p.farm_id=fa.id "
+            "LEFT JOIN dealer_seed_prices dsp ON dsp.organization_id=fa.organization_id AND dsp.crop_year=cp.crop_year "
+            "AND dsp.seed_product_id=cp.selected_seed_product_id AND dsp.status='active' "
             "WHERE fa.organization_id=? AND fa.assigned_salesperson_id=? AND cp.crop_year=?",
+            (organization_id, user_id, crop_year),
+        ).fetchone()
+
+        override_stats = conn.execute(
+            "SELECT COUNT(*) FILTER (WHERE status<>'superseded') AS price_override_count,"
+            "COUNT(*) FILTER (WHERE status IN ('approved','countered')) AS approved_override_count "
+            "FROM price_approval_requests WHERE organization_id=? AND requested_by_user_id=? AND crop_year=?",
             (organization_id, user_id, crop_year),
         ).fetchone()
 
@@ -426,11 +450,20 @@ def dealer_salesperson_profile(organization_id: int, user_id: int, crop_year: in
     u = dict(user)
     u["role"] = "dealer_admin" if u["global_role"] == "dealer_admin" else "salesperson"
     u["can_sell"] = bool(u.get("sales_enabled"))
+    seed_dict = dict(seed)
+    seed_revenue = float(seed_dict.get("seed_value") or 0)
+    seed_margin = float(seed_dict.get("gross_margin") or 0)
+    seed_dict["gross_margin_pct"] = round(seed_margin / seed_revenue * 100.0, 1) if seed_revenue > 0 else 0.0
+    seed_dict.update(dict(override_stats))
+    for farm_row in farms:
+        revenue = float(farm_row.get("proposed_revenue") or 0)
+        margin = float(farm_row.get("gross_margin") or 0)
+        farm_row["gross_margin_pct"] = round(margin / revenue * 100.0, 1) if revenue > 0 else 0.0
     return {
         "user": u,
         "crop_year": crop_year,
         "totals": dict(totals),
-        "seed": {**dict(seed), "won_units": float(won_units["units"] or 0)},
+        "seed": {**seed_dict, "won_units": float(won_units["units"] or 0)},
         "proposals": dict(proposals),
         "pipeline": pipeline,
         "farms": farms,
@@ -532,13 +565,37 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
             "(SELECT COALESCE(SUM(p.total_acres),0) FROM prospects p WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id) AS acres,"
             "(SELECT COALESCE(SUM(p.total_acres),0) FROM prospects p WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id AND lower(p.status) NOT IN ('won','lost')) AS pipeline_acres,"
             "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id WHERE fa.organization_id=? AND fa.assigned_salesperson_id=u.id AND cp.crop_year=?) AS seed_units,"
+            "(SELECT COALESCE(SUM(cp.total_seed_cost),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id WHERE fa.organization_id=? AND fa.assigned_salesperson_id=u.id AND cp.crop_year=?) AS proposed_revenue,"
+            "(SELECT COALESCE(SUM(CASE WHEN dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL AND cp.total_seed_cost IS NOT NULL THEN cp.total_seed_cost-(cp.units_required*dsp.dealer_cost) ELSE 0 END),0) "
+            " FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id "
+            " LEFT JOIN dealer_seed_prices dsp ON dsp.organization_id=fa.organization_id AND dsp.crop_year=cp.crop_year AND dsp.seed_product_id=cp.selected_seed_product_id AND dsp.status='active' "
+            " WHERE fa.organization_id=? AND fa.assigned_salesperson_id=u.id AND cp.crop_year=?) AS gross_margin,"
+            "(SELECT COALESCE(SUM(CASE WHEN dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL AND cp.total_seed_cost IS NOT NULL THEN cp.total_seed_cost-(cp.units_required*dsp.dealer_cost) ELSE 0 END),0) "
+            " FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id "
+            " JOIN prospects p ON p.farm_id=fa.id "
+            " LEFT JOIN dealer_seed_prices dsp ON dsp.organization_id=fa.organization_id AND dsp.crop_year=cp.crop_year AND dsp.seed_product_id=cp.selected_seed_product_id AND dsp.status='active' "
+            " WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id AND lower(p.status)='won' AND cp.crop_year=?) AS won_gross_margin,"
+            "(SELECT COUNT(*) FROM price_approval_requests r WHERE r.organization_id=? AND r.requested_by_user_id=u.id AND r.crop_year=? AND r.status<>'superseded') AS price_override_count,"
             "(SELECT COALESCE(SUM(cp.units_required),0) FROM field_crop_plans cp JOIN fields ff ON ff.id=cp.field_id JOIN farms fa ON fa.id=ff.farm_id JOIN prospects p ON p.farm_id=fa.id WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id AND lower(p.status)='won' AND cp.crop_year=?) AS won_units,"
             "(SELECT COUNT(*) FROM seed_proposals sp JOIN prospects p ON p.id=sp.prospect_id WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id AND sp.crop_year=?) AS proposals,"
             "(SELECT COALESCE(SUM(s.active_seconds),0) FROM user_activity_sessions s WHERE s.user_id=u.id) AS active_seconds "
             "FROM platform_users u WHERE u.organization_id=? AND u.status='active' "
             "ORDER BY CASE WHEN u.global_role='dealer_admin' THEN 0 ELSE 1 END,u.display_name",
-            (organization_id, organization_id, organization_id, organization_id, crop_year, organization_id, crop_year, organization_id, crop_year, organization_id),
+            (organization_id, organization_id, organization_id,
+             organization_id, crop_year,
+             organization_id, crop_year,
+             organization_id, crop_year,
+             organization_id, crop_year,
+             organization_id, crop_year,
+             organization_id, crop_year,
+             organization_id, crop_year,
+             organization_id),
         ).fetchall())
+
+        for member in team:
+            revenue = float(member.get("proposed_revenue") or 0)
+            margin = float(member.get("gross_margin") or 0)
+            member["gross_margin_pct"] = round(margin / revenue * 100.0, 1) if revenue > 0 else 0.0
 
         catalog = conn.execute(
             "SELECT id,crop_year,catalog_name,status,product_count FROM seed_catalogs "

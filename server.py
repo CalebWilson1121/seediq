@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -163,6 +164,80 @@ def _require_prospect_access(conn, prospect_id: int, user: dict):
         raise HTTPException(status_code=404, detail="Prospect not found")
     return row
 
+def _require_farm_access(conn, farm_id: int, user: dict):
+    row = conn.execute(
+        "SELECT id,organization_id,assigned_salesperson_id FROM farms WHERE id=?",
+        (farm_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Farm not found")
+    role = _role(user)
+    if role == "super_admin":
+        return row
+    if int(row["organization_id"] or 0) != int(user.get("organization_id") or 0):
+        raise HTTPException(status_code=404, detail="Farm not found")
+    if role == "salesperson" and int(row["assigned_salesperson_id"] or 0) != int(user["id"]):
+        raise HTTPException(status_code=404, detail="Farm not found")
+    return row
+
+
+def _require_field_access(conn, field_id: int, user: dict):
+    row = conn.execute(
+        "SELECT f.id,f.farm_id,fa.organization_id,fa.assigned_salesperson_id "
+        "FROM fields f JOIN farms fa ON fa.id=f.farm_id WHERE f.id=?",
+        (field_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Field not found")
+    role = _role(user)
+    if role == "super_admin":
+        return row
+    if int(row["organization_id"] or 0) != int(user.get("organization_id") or 0):
+        raise HTTPException(status_code=404, detail="Field not found")
+    if role == "salesperson" and int(row["assigned_salesperson_id"] or 0) != int(user["id"]):
+        raise HTTPException(status_code=404, detail="Field not found")
+    return row
+
+
+def _require_aph_match_access(conn, match_id: int, user: dict):
+    row = conn.execute(
+        "SELECT m.id,m.farm_id,fa.organization_id,fa.assigned_salesperson_id "
+        "FROM aph_unit_matches m JOIN farms fa ON fa.id=m.farm_id WHERE m.id=?",
+        (match_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="APH unit match not found")
+    _require_farm_access(conn, int(row["farm_id"]), user)
+    return row
+
+
+def _require_proposal_access(conn, proposal_id: int, user: dict):
+    row = conn.execute(
+        "SELECT sp.id,sp.prospect_id,p.organization_id,p.assigned_salesperson_id "
+        "FROM seed_proposals sp JOIN prospects p ON p.id=sp.prospect_id WHERE sp.id=?",
+        (proposal_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    _require_prospect_access(conn, int(row["prospect_id"]), user)
+    return row
+
+
+def _enforce_record_path_access(path: str, user: dict) -> None:
+    checks = (
+        (r"^/api/farms/(\d+)(?:/|$)", _require_farm_access),
+        (r"^/api/fields/(\d+)(?:/|$)", _require_field_access),
+        (r"^/api/prospects/(\d+)(?:/|$)", _require_prospect_access),
+        (r"^/api/aph-matches/(\d+)(?:/|$)", _require_aph_match_access),
+        (r"^/api/proposals/(\d+)(?:/|$)", _require_proposal_access),
+    )
+    for pattern, checker in checks:
+        match = re.match(pattern, path)
+        if match:
+            with connect() as conn:
+                checker(conn, int(match.group(1)), user)
+            return
+
 # Demo/production safety boundary. AcreFit's app data is server-rendered through
 # FastAPI/Postgres, so protect the application surface even where an individual
 # legacy route has not yet added a role decorator. Farmer proposal share links
@@ -195,6 +270,11 @@ async def require_app_session(request: Request, call_next):
 
     user = _user(request)
     if user:
+        if path.startswith("/api/"):
+            try:
+                _enforce_record_path_access(path, user)
+            except HTTPException as exc:
+                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         return await call_next(request)
 
     if path.startswith("/api/"):
@@ -328,6 +408,9 @@ async def upload_document(file: Annotated[UploadFile, File(...)], request: Reque
     if not user:
         raise HTTPException(status_code=401, detail="Login required")
     organization_id = assigned_salesperson_id = created_by_user_id = None
+    if target_farm_id is not None:
+        with connect() as conn:
+            _require_farm_access(conn, int(target_farm_id), user)
     if target_farm_id is None:
         if _role(user) == "super_admin":
             organization_id = 1
@@ -397,11 +480,28 @@ def catalog_publish(catalog_id: int):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/api/farms")
-def list_farms():
+def list_farms(request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
     try:
+        role = _role(user)
         with connect() as conn:
-            rows = conn.execute("SELECT * FROM farms ORDER BY updated_at DESC").fetchall()
+            if role == "super_admin":
+                rows = conn.execute("SELECT * FROM farms ORDER BY updated_at DESC").fetchall()
+            elif role == "dealer_admin":
+                rows = conn.execute(
+                    "SELECT * FROM farms WHERE organization_id=? ORDER BY updated_at DESC",
+                    (int(user["organization_id"]),),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM farms WHERE organization_id=? AND assigned_salesperson_id=? ORDER BY updated_at DESC",
+                    (int(user["organization_id"]), int(user["id"])),
+                ).fetchall()
         return rows_to_dicts(rows)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Farm database is temporarily unavailable.") from exc
 

@@ -70,6 +70,7 @@ def login(email: str, password: str) -> dict[str, Any]:
             "role": effective_role(user),
             "organization_id": user["organization_id"],
             "organization_name": user["organization_name"],
+            "sales_enabled": bool(user["sales_enabled"]) if user["organization_id"] is not None else False,
         },
     }
 
@@ -86,7 +87,7 @@ def current_user(token: str | None) -> dict[str, Any] | None:
         return None
     with connect() as conn:
         row = conn.execute(
-            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.organization_id,"
+            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.organization_id,u.sales_enabled,"
             "o.name AS organization_name,o.status AS organization_status,o.access_enabled "
             "FROM user_sessions s JOIN platform_users u ON u.id=s.user_id "
             "LEFT JOIN dealer_organizations o ON o.id=u.organization_id "
@@ -138,7 +139,7 @@ def dealer_detail(organization_id: int) -> dict[str, Any]:
         if not org:
             raise KeyError("Dealer not found")
         users = rows_to_dicts(conn.execute(
-            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.last_login_at,u.created_at,COALESCE(dm.role,CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END) AS dealer_role "
+            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.sales_enabled,u.last_login_at,u.created_at,COALESCE(dm.role,CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END) AS dealer_role "
             "FROM platform_users u LEFT JOIN dealer_members dm ON lower(dm.email)=lower(u.email) AND dm.organization_id=u.organization_id "
             "WHERE u.organization_id=? ORDER BY u.display_name",
             (organization_id,),
@@ -196,7 +197,7 @@ def dealer_team(organization_id: int) -> dict[str, Any]:
         if not org:
             raise KeyError("Dealer not found")
         users = rows_to_dicts(conn.execute(
-            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.last_login_at,u.created_at,"
+            "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.sales_enabled,u.last_login_at,u.created_at,"
             "CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END AS role "
             "FROM platform_users u LEFT JOIN dealer_members dm ON lower(dm.email)=lower(u.email) AND dm.organization_id=u.organization_id "
             "WHERE u.organization_id=? ORDER BY CASE WHEN u.global_role='dealer_admin' THEN 0 ELSE 1 END,u.display_name",
@@ -205,7 +206,7 @@ def dealer_team(organization_id: int) -> dict[str, Any]:
     return {"dealer": dict(org), "seat_count": len(users), "max_seats": org["max_seats"], "users": users}
 
 
-def create_dealer_user(organization_id: int, email: str, display_name: str, role: str, actor_user_id: int) -> dict[str, Any]:
+def create_dealer_user(organization_id: int, email: str, display_name: str, role: str, actor_user_id: int, sales_enabled: bool = True) -> dict[str, Any]:
     role = (role or "salesperson").strip().lower()
     if role not in {"salesperson", "dealer_admin"}:
         raise ValueError("Role must be salesperson or dealer_admin")
@@ -230,8 +231,8 @@ def create_dealer_user(organization_id: int, email: str, display_name: str, role
         password_hash = _password_hash(temp_password, salt)
         global_role = "dealer_admin" if role == "dealer_admin" else "dealer_user"
         user = conn.execute(
-            "INSERT INTO platform_users(email,display_name,password_salt,password_hash,global_role,status,organization_id) VALUES(?,?,?,?,?,'active',?) RETURNING id,email,display_name,global_role,status,created_at",
-            (email, display_name, salt, password_hash, global_role, organization_id),
+            "INSERT INTO platform_users(email,display_name,password_salt,password_hash,global_role,status,organization_id,sales_enabled) VALUES(?,?,?,?,?,'active',?,?) RETURNING id,email,display_name,global_role,status,sales_enabled,created_at",
+            (email, display_name, salt, password_hash, global_role, organization_id, bool(sales_enabled)),
         ).fetchone()
         conn.execute(
             "INSERT INTO dealer_members(organization_id,email,display_name,role,status,metadata_json) VALUES(?,?,?,?, 'active','{}'::jsonb) "
@@ -240,7 +241,7 @@ def create_dealer_user(organization_id: int, email: str, display_name: str, role
         )
         conn.execute(
             "INSERT INTO admin_audit_log(actor_user_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?::jsonb)",
-            (actor_user_id, "dealer_user_created", "platform_user", str(user["id"]), '{"role":"' + role + '"}'),
+            (actor_user_id, "dealer_user_created", "platform_user", str(user["id"]), '{"role":"' + role + '","sales_enabled":' + ('true' if sales_enabled else 'false') + '}'),
         )
     result = dict(user)
     result["role"] = role
@@ -287,7 +288,7 @@ def reset_dealer_team_user_password(organization_id: int, user_id: int, actor_us
     }
 
 
-def update_dealer_team_user(organization_id: int, user_id: int, display_name: str, email: str, actor_user_id: int) -> dict[str, Any]:
+def update_dealer_team_user(organization_id: int, user_id: int, display_name: str, email: str, actor_user_id: int, sales_enabled: bool | None = None) -> dict[str, Any]:
     display_name = (display_name or "").strip()
     email = (email or "").strip().lower()
     if not display_name:
@@ -307,10 +308,16 @@ def update_dealer_team_user(organization_id: int, user_id: int, display_name: st
         ).fetchone()
         if duplicate:
             raise ValueError("Another AcreFit user already uses that email")
-        conn.execute(
-            "UPDATE platform_users SET display_name=?,email=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (display_name, email, user_id),
-        )
+        if sales_enabled is None:
+            conn.execute(
+                "UPDATE platform_users SET display_name=?,email=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (display_name, email, user_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE platform_users SET display_name=?,email=?,sales_enabled=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (display_name, email, bool(sales_enabled), user_id),
+            )
         conn.execute(
             "UPDATE dealer_members SET display_name=?,email=? WHERE organization_id=? AND platform_user_id=?",
             (display_name, email, organization_id, user_id),
@@ -325,7 +332,7 @@ def update_dealer_team_user(organization_id: int, user_id: int, display_name: st
             (actor_user_id, "dealer_user_profile_updated", "platform_user", str(user_id), email, display_name),
         )
         row = conn.execute(
-            "SELECT id,email,display_name,global_role,status,organization_id,created_at,last_login_at FROM platform_users WHERE id=?",
+            "SELECT id,email,display_name,global_role,status,organization_id,sales_enabled,created_at,last_login_at FROM platform_users WHERE id=?",
             (user_id,),
         ).fetchone()
     result = dict(row)
@@ -336,7 +343,7 @@ def update_dealer_team_user(organization_id: int, user_id: int, display_name: st
 def dealer_salesperson_profile(organization_id: int, user_id: int, crop_year: int = 2027) -> dict[str, Any]:
     with connect() as conn:
         user = conn.execute(
-            "SELECT id,email,display_name,global_role,status,organization_id,created_at,updated_at,last_login_at "
+            "SELECT id,email,display_name,global_role,status,organization_id,sales_enabled,created_at,updated_at,last_login_at "
             "FROM platform_users WHERE id=? AND organization_id=?",
             (user_id, organization_id),
         ).fetchone()
@@ -415,7 +422,7 @@ def dealer_salesperson_profile(organization_id: int, user_id: int, crop_year: in
 
     u = dict(user)
     u["role"] = "dealer_admin" if u["global_role"] == "dealer_admin" else "salesperson"
-    u["can_sell"] = u["global_role"] in ("dealer_admin", "dealer_user")
+    u["can_sell"] = bool(u.get("sales_enabled"))
     return {
         "user": u,
         "crop_year": crop_year,
@@ -496,7 +503,7 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
         ).fetchone()
 
         team = rows_to_dicts(conn.execute(
-            "SELECT u.id,u.display_name,u.email,u.global_role,u.status,u.last_login_at,"
+            "SELECT u.id,u.display_name,u.email,u.global_role,u.status,u.sales_enabled,u.last_login_at,"
             "CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END AS role,"
             "(SELECT COUNT(*) FROM prospects p WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id) AS farms,"
             "(SELECT COALESCE(SUM(p.total_acres),0) FROM prospects p WHERE p.organization_id=? AND p.assigned_salesperson_id=u.id) AS acres,"
@@ -521,7 +528,7 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
     stats.update(dict(seed_stats))
     stats.update(dict(won_seed))
     stats.update(dict(proposal_stats))
-    stats["active_salespeople"] = len([x for x in team if x["global_role"] in ("dealer_admin", "dealer_user") and x["status"] == "active"])
+    stats["active_salespeople"] = len([x for x in team if bool(x.get("sales_enabled")) and x["status"] == "active"])
     return {
         "dealer": dict(org),
         "crop_year": crop_year,

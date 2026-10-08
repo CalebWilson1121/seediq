@@ -488,6 +488,26 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
             (organization_id, crop_year),
         ).fetchone()
 
+        margin_stats = conn.execute(
+            "SELECT "
+            "COALESCE(SUM(cp.total_seed_cost),0) AS proposed_seed_revenue,"
+            "COALESCE(SUM(CASE WHEN dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL "
+            "THEN cp.units_required*dsp.dealer_cost ELSE 0 END),0) AS proposed_seed_cost,"
+            "COALESCE(SUM(CASE WHEN dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL AND cp.total_seed_cost IS NOT NULL "
+            "THEN cp.total_seed_cost-(cp.units_required*dsp.dealer_cost) ELSE 0 END),0) AS proposed_gross_margin,"
+            "COALESCE(SUM(CASE WHEN lower(p.status)='won' AND dsp.dealer_cost IS NOT NULL AND cp.units_required IS NOT NULL AND cp.total_seed_cost IS NOT NULL "
+            "THEN cp.total_seed_cost-(cp.units_required*dsp.dealer_cost) ELSE 0 END),0) AS won_gross_margin,"
+            "COUNT(*) FILTER (WHERE cp.selected_seed_product_id IS NOT NULL AND dsp.dealer_cost IS NULL) AS products_missing_cost "
+            "FROM field_crop_plans cp "
+            "JOIN fields f ON f.id=cp.field_id "
+            "JOIN farms fa ON fa.id=f.farm_id "
+            "LEFT JOIN prospects p ON p.farm_id=fa.id "
+            "LEFT JOIN dealer_seed_prices dsp ON dsp.organization_id=fa.organization_id "
+            "AND dsp.crop_year=cp.crop_year AND dsp.seed_product_id=cp.selected_seed_product_id AND dsp.status='active' "
+            "WHERE fa.organization_id=? AND cp.crop_year=? AND cp.selected_seed_product_id IS NOT NULL",
+            (organization_id, crop_year),
+        ).fetchone()
+
         won_seed = conn.execute(
             "SELECT COALESCE(SUM(cp.units_required),0) AS won_units "
             "FROM field_crop_plans cp JOIN fields f ON f.id=cp.field_id JOIN farms fa ON fa.id=f.farm_id "
@@ -529,6 +549,10 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
     stats = dict(base_stats)
     stats.update(dict(acreage))
     stats.update(dict(seed_stats))
+    stats.update(dict(margin_stats))
+    revenue = float(stats.get("proposed_seed_revenue") or 0)
+    margin = float(stats.get("proposed_gross_margin") or 0)
+    stats["gross_margin_pct"] = round((margin / revenue * 100.0), 1) if revenue > 0 else 0.0
     stats.update(dict(won_seed))
     stats.update(dict(proposal_stats))
     stats["active_salespeople"] = len([x for x in team if bool(x.get("sales_enabled")) and x["status"] == "active"])

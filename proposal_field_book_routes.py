@@ -153,6 +153,7 @@ def _build_field_book_data(token: str):
             "seed_cost_per_acre": row.get("seed_cost_per_acre"),
             "total_seed_cost": row.get("total_seed_cost"),
             "pricing_source": row.get("pricing_source"),
+            "seed_product_id": row.get("seed_product_id"),
             "product_name": row.get("product_name"),
             "brand": row.get("brand"),
             "trait_package": row.get("trait_package"),

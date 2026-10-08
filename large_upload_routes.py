@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -27,6 +29,20 @@ class ProcessUploadRequest(BaseModel):
 def _require_dealer(request: Request):
     try:
         user = current_user(request.cookies.get(SESSION_COOKIE))
+        if not user and os.getenv("ACREFIT_DEMO_MODE") == "1":
+            demo_role = request.cookies.get("acrefit_demo_role")
+            demo_ids = {"super_admin": 1, "dealer_admin": 2, "salesperson": 3}
+            demo_user_id = demo_ids.get(demo_role or "")
+            if demo_user_id:
+                with connect() as conn:
+                    row = conn.execute(
+                        "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.organization_id,u.sales_enabled,"
+                        "o.name AS organization_name,o.status AS organization_status,o.access_enabled "
+                        "FROM platform_users u LEFT JOIN dealer_organizations o ON o.id=u.organization_id WHERE u.id=?",
+                        (demo_user_id,),
+                    ).fetchone()
+                if row and row["status"] == "active":
+                    user = dict(row)
         return require_role(user, "dealer_admin", "dealer_user", "super_admin")
     except PermissionError as exc:
         raise HTTPException(status_code=401 if str(exc) == "Login required" else 403, detail=str(exc)) from exc

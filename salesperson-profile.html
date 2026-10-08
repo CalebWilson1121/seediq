@@ -23,6 +23,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&
 const q=new URLSearchParams(location.search),userId=Number(q.get('id')),orgId=Number(q.get('organization_id'))||null;let selectedYear=Number(q.get('year'))||2027,data=null;
 async function api(u,o={}){const r=await fetch(u,o);let d={};try{d=await r.json()}catch{}if(r.status===401){location='/login.html';throw Error('Sign in required')}if(!r.ok)throw Error(d.detail||'Request failed');return d}
 const fmt=(v,d=0)=>Number(v||0).toLocaleString(undefined,{maximumFractionDigits:d});
+const money=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(Number(v||0));
 const time=s=>{const n=Number(s||0),h=Math.floor(n/3600),m=Math.floor((n%3600)/60);return h?(`${h}h ${m}m`):(`${m}m`)}
 function render(){
  const u=data.user,t=data.totals,s=data.seed,p=data.proposals,a=data.activity;
@@ -31,8 +32,13 @@ function render(){
  <div class="row" style="margin-top:12px"><div id="msg" style="flex:1"></div><label style="min-width:150px"><div class="muted" style="font-size:11px">CROP YEAR</div><select id="yearSelect" class="input" onchange="selectedYear=Number(this.value);load()"><option value="2026">2026</option><option value="2027">2027</option><option value="2028">2028</option><option value="2029">2029</option></select></label></div>
  <div class="grid kpis">
   <div class="card"><div class="muted">Assigned Acres</div><div class="metric">${fmt(t.acres)}</div></div>
-  <div class="card"><div class="muted">Farms</div><div class="metric">${fmt(t.farms)}</div></div>
   <div class="card"><div class="muted">Seed Units</div><div class="metric">${fmt(s.units_recommended,1)}</div></div>
+  <div class="card"><div class="muted">Proposed Revenue</div><div class="metric">${money(s.seed_value)}</div></div>
+  <div class="card"><div class="muted">Gross Margin</div><div class="metric">${money(s.gross_margin)}</div></div>
+  <div class="card"><div class="muted">Margin %</div><div class="metric">${fmt(s.gross_margin_pct,1)}%</div></div>
+  <div class="card"><div class="muted">Won Margin</div><div class="metric">${money(s.won_gross_margin)}</div></div>
+  <div class="card"><div class="muted">Price Overrides</div><div class="metric">${fmt(s.price_override_count)}</div></div>
+  <div class="card"><div class="muted">Approved/Countered</div><div class="metric">${fmt(s.approved_override_count)}</div></div>
   <div class="card"><div class="muted">Won Units</div><div class="metric">${fmt(s.won_units,1)}</div></div>
   <div class="card"><div class="muted">Active Time</div><div class="metric">${time(a.active_seconds)}</div></div>
  </div>
@@ -42,11 +48,13 @@ function render(){
   <div class="card"><h2 style="margin-top:0">Sales Performance</h2><table class="table">
    <tr><td>Won acres</td><td><b>${fmt(t.won_acres)}</b></td></tr><tr><td>Lost acres</td><td><b>${fmt(t.lost_acres)}</b></td></tr>
    <tr><td>Seed units recommended</td><td><b>${fmt(s.units_recommended,1)}</b></td></tr><tr><td>Corn units</td><td><b>${fmt(s.corn_units,1)}</b></td></tr>
-   <tr><td>Soybean units</td><td><b>${fmt(s.soybean_units,1)}</b></td></tr><tr><td>Estimated seed value</td><td><b>$${fmt(s.seed_value,0)}</b></td></tr>
+   <tr><td>Soybean units</td><td><b>${fmt(s.soybean_units,1)}</b></td></tr><tr><td>Proposed seed revenue</td><td><b>${money(s.seed_value)}</b></td></tr>
+   <tr><td>Proposed gross margin</td><td><b>${money(s.gross_margin)}</b></td></tr><tr><td>Gross margin %</td><td><b>${fmt(s.gross_margin_pct,1)}%</b></td></tr>
+   <tr><td>Won gross margin</td><td><b>${money(s.won_gross_margin)}</b></td></tr><tr><td>Price overrides</td><td><b>${fmt(s.price_override_count)}</b></td></tr>
    <tr><td>Proposals</td><td><b>${fmt(p.total)}</b></td></tr><tr><td>Approved proposals</td><td><b>${fmt(p.approved)}</b></td></tr>
   </table></div>
   <div class="card" style="margin-top:16px"><h2 style="margin-top:0">Pipeline</h2><table class="table"><tr><th>Stage</th><th>Farms</th><th>Acres</th></tr>${data.pipeline.length?data.pipeline.map(x=>`<tr><td>${esc(String(x.status||'new').replaceAll('_',' '))}</td><td>${fmt(x.farms)}</td><td>${fmt(x.acres)}</td></tr>`).join(''):'<tr><td colspan="3">No pipeline yet.</td></tr>'}</table></div>
-  <div class="card" style="margin-top:16px"><h2 style="margin-top:0">Assigned Book</h2><table class="table"><tr><th>Farm</th><th>Acres</th><th>Stage</th><th>Seed Units</th><th></th></tr>${data.farms.length?data.farms.map(f=>`<tr><td><b>${esc(f.prospect_name)}</b><div class="muted">${esc([f.county,f.state].filter(Boolean).join(', '))}</div></td><td>${fmt(f.total_acres)}</td><td>${esc(String(f.status||'new').replaceAll('_',' '))}</td><td>${fmt(f.seed_units,1)}</td><td><a class="btn alt" href="/prospect-detail.html?id=${f.prospect_id}">Open</a></td></tr>`).join(''):'<tr><td colspan="5">No farms assigned.</td></tr>'}</table></div>
+  <div class="card" style="margin-top:16px"><h2 style="margin-top:0">Assigned Book — Farm Economics</h2><table class="table"><tr><th>Farm</th><th>Stage</th><th>Units</th><th>Revenue</th><th>Gross Margin</th><th>Margin %</th><th>Overrides</th><th></th></tr>${data.farms.length?data.farms.map(f=>`<tr><td><b>${esc(f.prospect_name)}</b><div class="muted">${fmt(f.total_acres)} ac • ${esc([f.county,f.state].filter(Boolean).join(', '))}</div></td><td>${esc(String(f.status||'new').replaceAll('_',' '))}</td><td>${fmt(f.seed_units,1)}</td><td><b>${money(f.proposed_revenue)}</b></td><td><b>${money(f.gross_margin)}</b></td><td><b>${fmt(f.gross_margin_pct,1)}%</b></td><td>${fmt(f.price_override_count)}</td><td><a class="btn alt" href="/prospect-detail.html?id=${f.prospect_id}">Open</a></td></tr>`).join(''):'<tr><td colspan="8">No farms assigned.</td></tr>'}</table></div>
  </div>
  <div>
   <div class="card"><h2 style="margin-top:0">Platform Activity</h2><table class="table">

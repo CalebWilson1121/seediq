@@ -54,4 +54,4 @@ $('uploadBtn').addEventListener('click',async()=>{const f=$('fileInput').files[0
 $('refreshBtn').addEventListener('click',loadFarms);$('aiBtn').addEventListener('click',async()=>{if(!selectedFarm)return;$('aiBtn').disabled=true;try{const r=await api('/api/farms/'+selectedFarm+'/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:'farm_summary',instruction:'Summarize this operation for an agronomist and identify missing data needed for seed placement.'})});$('aiOut').innerHTML='<b>'+esc(r.provider)+' / '+esc(r.model||'')+'</b><br>'+esc(r.output)}catch(e){$('aiOut').className='callout warn';$('aiOut').textContent=e.message}finally{$('aiBtn').disabled=false}});
 const dz=$('dropzone');['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag')}));['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('drag')}));dz.addEventListener('drop',e=>{if(e.dataTransfer.files.length)$('fileInput').files=e.dataTransfer.files});health();
 </script>
-</body></html>
+<script src="/activity.js"></script></body></html>

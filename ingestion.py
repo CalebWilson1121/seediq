@@ -139,17 +139,26 @@ def _upsert_prospect(conn, farm_id: int, document_id: int, parsed: ParsedDocumen
         })
         source = "mapped_soi_upload"
 
+    farm_owner = conn.execute(
+        "SELECT organization_id,assigned_salesperson_id,created_by_user_id FROM farms WHERE id=?",
+        (farm_id,),
+    ).fetchone()
+    if not farm_owner:
+        raise KeyError(f"Farm {farm_id} not found")
     conn.execute(
-        "INSERT INTO prospects(farm_id,source_document_id,prospect_name,status,source,total_acres,crops_json,metadata_json) "
-        "VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb) "
+        "INSERT INTO prospects(farm_id,source_document_id,prospect_name,status,source,total_acres,crops_json,metadata_json,organization_id,assigned_salesperson_id,created_by_user_id) "
+        "VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb,?,?,?) "
         "ON CONFLICT(farm_id) DO UPDATE SET "
         "source_document_id=excluded.source_document_id, "
         "prospect_name=CASE WHEN prospects.prospect_name='Imported Prospect' THEN excluded.prospect_name ELSE prospects.prospect_name END, "
         "total_acres=CASE WHEN excluded.total_acres>0 THEN excluded.total_acres ELSE prospects.total_acres END, "
         "crops_json=CASE WHEN jsonb_array_length(excluded.crops_json)>0 THEN excluded.crops_json ELSE prospects.crops_json END, "
         "metadata_json=prospects.metadata_json || excluded.metadata_json, "
+        "organization_id=COALESCE(prospects.organization_id,excluded.organization_id), "
+        "assigned_salesperson_id=COALESCE(prospects.assigned_salesperson_id,excluded.assigned_salesperson_id), "
+        "created_by_user_id=COALESCE(prospects.created_by_user_id,excluded.created_by_user_id), "
         "updated_at=CURRENT_TIMESTAMP",
-        (farm_id, document_id, prospect_name, "new", source, total_acres, json_dumps(crops), json_dumps(metadata)),
+        (farm_id, document_id, prospect_name, "new", source, total_acres, json_dumps(crops), json_dumps(metadata), farm_owner["organization_id"], farm_owner["assigned_salesperson_id"], farm_owner["created_by_user_id"]),
     )
     row = conn.execute("SELECT id FROM prospects WHERE farm_id=?", (farm_id,)).fetchone()
     return int(row["id"]) if row else None
@@ -463,7 +472,7 @@ def _prepare_aph_map_first(conn, farm_id: int, document_id: int, parsed: ParsedD
         units += 1
     return matches, units
 
-def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = None, reprocess: bool = False, target_farm_id: int | None = None) -> dict[str, Any]:
+def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = None, reprocess: bool = False, target_farm_id: int | None = None, organization_id: int | None = None, assigned_salesperson_id: int | None = None, created_by_user_id: int | None = None) -> dict[str, Any]:
     sha = sha256_file(temp_path)
     with connect() as conn:
         if target_farm_id is not None:
@@ -499,9 +508,18 @@ def ingest_file(temp_path: Path, original_name: str, forced_type: str | None = N
             farm_id = int(farm["id"])
         else:
             farm_key = _farm_key(parsed, sha)
+            if organization_id is None or assigned_salesperson_id is None or created_by_user_id is None:
+                raise ValueError("New farm uploads require dealership and salesperson ownership")
             conn.execute(
-                "INSERT INTO farms(farm_key,farm_name,producer_name) VALUES(?,?,?) ON CONFLICT(farm_key) DO UPDATE SET farm_name=COALESCE(excluded.farm_name,farms.farm_name),producer_name=COALESCE(excluded.producer_name,farms.producer_name),updated_at=CURRENT_TIMESTAMP",
-                (farm_key, parsed.farm_name or parsed.producer_name or "Imported Farm", parsed.producer_name),
+                "INSERT INTO farms(farm_key,farm_name,producer_name,organization_id,assigned_salesperson_id,created_by_user_id) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(farm_key) DO UPDATE SET "
+                "farm_name=COALESCE(excluded.farm_name,farms.farm_name),"
+                "producer_name=COALESCE(excluded.producer_name,farms.producer_name),"
+                "organization_id=COALESCE(farms.organization_id,excluded.organization_id),"
+                "assigned_salesperson_id=COALESCE(farms.assigned_salesperson_id,excluded.assigned_salesperson_id),"
+                "created_by_user_id=COALESCE(farms.created_by_user_id,excluded.created_by_user_id),"
+                "updated_at=CURRENT_TIMESTAMP",
+                (farm_key, parsed.farm_name or parsed.producer_name or "Imported Farm", parsed.producer_name, organization_id, assigned_salesperson_id, created_by_user_id),
             )
             farm = conn.execute("SELECT * FROM farms WHERE farm_key=?", (farm_key,)).fetchone()
             farm_id = int(farm["id"])

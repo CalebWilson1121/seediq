@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import logging
 import math
@@ -176,9 +177,40 @@ def _render_field_map(geom):
 @router.get("/api/public/proposals/{public_token}/fields/{field_id}/map-image")
 def public_field_map_image(public_token: str, field_id: int):
     geom = _field_boundary(public_token, field_id)
-    content = _render_field_map(geom)
+    boundary_hash = hashlib.sha256(geom.wkb).hexdigest()
+    content = None
+    try:
+        with connect() as conn:
+            cached = conn.execute(
+                "SELECT image_bytes FROM field_map_cache WHERE field_id=? AND boundary_hash=?",
+                (field_id, boundary_hash),
+            ).fetchone()
+        if cached and cached.get("image_bytes"):
+            content = bytes(cached["image_bytes"])
+    except Exception:
+        content = None
+
+    if content is None:
+        content = _render_field_map(geom)
+        try:
+            with connect() as conn:
+                conn.execute(
+                    "INSERT INTO field_map_cache(field_id,boundary_hash,image_bytes) VALUES(?,?,?) "
+                    "ON CONFLICT(field_id,boundary_hash) DO UPDATE SET image_bytes=excluded.image_bytes,created_at=CURRENT_TIMESTAMP",
+                    (field_id, boundary_hash, content),
+                )
+                conn.execute(
+                    "DELETE FROM field_map_cache WHERE field_id=? AND boundary_hash<>?",
+                    (field_id, boundary_hash),
+                )
+        except Exception:
+            pass
+
     return Response(
         content=content,
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"},
+        headers={
+            "Cache-Control": "public, max-age=86400, s-maxage=604800, stale-while-revalidate=604800",
+            "ETag": f'"{boundary_hash}"',
+        },
     )

@@ -285,7 +285,8 @@ def dealer_dashboard(request: Request):
     user = _require(request, "dealer_admin", "dealer_user")
     if user.get("organization_id") is None:
         raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
-    return dealer_demo_dashboard(int(user["organization_id"]))
+    salesperson_user_id = int(user["id"]) if _role(user) == "salesperson" else None
+    return dealer_demo_dashboard(int(user["organization_id"]), salesperson_user_id)
 
 @app.get("/api/dealer/team")
 def get_dealer_team(request: Request):

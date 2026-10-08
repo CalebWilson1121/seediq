@@ -27,6 +27,15 @@ def _temporary_password() -> str:
     return f"AcreFit-{core}!"
 
 
+def effective_role(user: dict[str, Any] | Any) -> str:
+    global_role = user["global_role"] if not isinstance(user, dict) else user.get("global_role")
+    if global_role == "super_admin":
+        return "super_admin"
+    if global_role == "dealer_admin":
+        return "dealer_admin"
+    return "salesperson"
+
+
 def login(email: str, password: str) -> dict[str, Any]:
     email = email.strip().lower()
     with connect() as conn:
@@ -58,6 +67,7 @@ def login(email: str, password: str) -> dict[str, Any]:
             "email": user["email"],
             "display_name": user["display_name"],
             "global_role": user["global_role"],
+            "role": effective_role(user),
             "organization_id": user["organization_id"],
             "organization_name": user["organization_name"],
         },
@@ -89,7 +99,9 @@ def current_user(token: str | None) -> dict[str, Any] | None:
             if not bool(row["access_enabled"]) or row["organization_status"] not in ("active", "trial"):
                 return None
         conn.execute("UPDATE user_sessions SET last_seen_at=CURRENT_TIMESTAMP WHERE token_hash=?", (_token_hash(token),))
-    return dict(row)
+    result = dict(row)
+    result["role"] = effective_role(result)
+    return result
 
 
 def require_role(user: dict[str, Any] | None, *roles: str) -> dict[str, Any]:
@@ -185,7 +197,7 @@ def dealer_team(organization_id: int) -> dict[str, Any]:
             raise KeyError("Dealer not found")
         users = rows_to_dicts(conn.execute(
             "SELECT u.id,u.email,u.display_name,u.global_role,u.status,u.last_login_at,u.created_at,"
-            "COALESCE(dm.role,CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END) AS role "
+            "CASE WHEN u.global_role='dealer_admin' THEN 'dealer_admin' ELSE 'salesperson' END AS role "
             "FROM platform_users u LEFT JOIN dealer_members dm ON lower(dm.email)=lower(u.email) AND dm.organization_id=u.organization_id "
             "WHERE u.organization_id=? ORDER BY CASE WHEN u.global_role='dealer_admin' THEN 0 ELSE 1 END,u.display_name",
             (organization_id,),
@@ -195,8 +207,8 @@ def dealer_team(organization_id: int) -> dict[str, Any]:
 
 def create_dealer_user(organization_id: int, email: str, display_name: str, role: str, actor_user_id: int) -> dict[str, Any]:
     role = (role or "salesperson").strip().lower()
-    if role not in {"salesperson", "agronomist", "dealer_admin"}:
-        raise ValueError("Role must be salesperson, agronomist, or dealer_admin")
+    if role not in {"salesperson", "dealer_admin"}:
+        raise ValueError("Role must be salesperson or dealer_admin")
     email = email.strip().lower()
     display_name = display_name.strip()
     if not email or "@" not in email:

@@ -258,20 +258,27 @@ def set_dealer_team_user_access(organization_id: int, user_id: int, enabled: boo
     return set_user_access(user_id, enabled, actor_user_id)
 
 
-def dealer_demo_dashboard(organization_id: int) -> dict[str, Any]:
+def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None = None) -> dict[str, Any]:
     with connect() as conn:
         org = conn.execute("SELECT id,name,status,access_enabled,license_end,max_seats FROM dealer_organizations WHERE id=?", (organization_id,)).fetchone()
         if not org:
             raise KeyError("Dealer not found")
+        where_sql = "p.organization_id=?"
+        params: tuple[Any, ...] = (organization_id,)
+        if salesperson_user_id is not None:
+            where_sql += " AND p.assigned_salesperson_id=?"
+            params = (organization_id, salesperson_user_id)
         prospects = rows_to_dicts(conn.execute(
-            "SELECT p.id,p.prospect_name,p.status,p.total_acres,p.metadata_json,f.id AS farm_id,f.producer_name "
-            "FROM prospects p JOIN farms f ON f.id=p.farm_id WHERE p.organization_id=? "
+            "SELECT p.id,p.prospect_name,p.status,p.total_acres,p.metadata_json,p.assigned_salesperson_id,"
+            "f.id AS farm_id,f.producer_name,u.display_name AS assigned_salesperson_name "
+            "FROM prospects p JOIN farms f ON f.id=p.farm_id "
+            "LEFT JOIN platform_users u ON u.id=p.assigned_salesperson_id WHERE " + where_sql + " "
             "ORDER BY CASE WHEN p.prospect_name ILIKE '%AcreFit Demo%' THEN 0 ELSE 1 END, p.updated_at DESC",
-            (organization_id,),
+            params,
         ).fetchall())
         stats = conn.execute(
-            "SELECT COUNT(*) AS prospects,COALESCE(SUM(total_acres),0) AS acres FROM prospects WHERE organization_id=?",
-            (organization_id,),
+            "SELECT COUNT(*) AS prospects,COALESCE(SUM(total_acres),0) AS acres FROM prospects p WHERE " + where_sql,
+            params,
         ).fetchone()
         catalog = conn.execute(
             "SELECT id,crop_year,catalog_name,status,product_count FROM seed_catalogs WHERE organization_id=? ORDER BY crop_year DESC,created_at DESC LIMIT 1",

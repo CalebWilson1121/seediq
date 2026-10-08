@@ -44,4 +44,4 @@ function render(){const f=current.field,p=current.plan,s=current.soil,ctx=fit?.f
 </div></div>`}
 async function boot(){if(!prospectId){const ps=await api('/api/prospects');if(!ps.length)throw new Error('No prospect farms found');prospectId=Number(ps[0].id)}prospect=await api('/api/prospects/'+prospectId);fields=(prospect.farm_context||{}).fields||[];soilRows=(prospect.soil_status||{}).fields||[];const r=await api('/api/farms/'+prospect.farm_id+'/crop-plans?crop_year='+year);plans=r.fields||[];if(!fieldId&&fields.length)fieldId=Number(fields[0].id);await loadField(false)}
 boot().catch(e=>document.getElementById('content').innerHTML='<div class="card"><b>Could not load Field Analysis.</b><br>'+esc(e.message)+'</div>');
-</script></body></html>
+</script><script src="/activity.js"></script></body></html>

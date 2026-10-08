@@ -5,13 +5,14 @@
 </style><link rel="icon" href="/acrefit-icon.svg"></head><body><div class="app"><aside class="sidebar"><div class="brand"><img src="/acrefit-logo-light.svg" alt="AcreFit" style="height:42px;width:auto;max-width:195px;display:block"></div><div class="subbrand">Field Intelligence & Seed Sales Platform</div><nav><a href="index.html">Dashboard</a><a href="farmers.html">Farmer & Fields</a><a href="field-analysis.html">Field Analysis</a><a href="whole-farm-plan.html">Whole-Farm Plan</a><a href="genetics.html">Seed Genetics</a><a class="active" href="prospects.html">Prospect Intelligence</a><a href="sales-packet.html">Sales Packet Builder</a><a href="pipeline.html">Sales Pipeline</a><a href="data-hub.html">Farm Data Hub</a></nav></aside><main class="main"><div class="hero"><div style="font-size:12px;letter-spacing:.07em;font-weight:800">LIVE PROSPECT INTELLIGENCE</div><h1>Create Prospect → Map Fields → Seed Analysis</h1><p>Create a farm from scratch or open an imported prospect, map its fields, pull soils and move directly into AcreFit seed placement.</p></div><div class="grid"><div class="card"><div class="muted">Open Prospects</div><div id="count" class="metric">—</div></div><div class="card"><div class="muted">Prospect Acres</div><div id="acres" class="metric">—</div></div><div class="card"><div class="muted">Units / Fields</div><div id="units" class="metric">—</div></div></div><div class="card" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0 0 4px">Create Prospect</h2><p class="muted" style="margin:0">Start from scratch, then move directly into the same mapping and seed-placement workflow as the sample farms.</p></div></div><div class="form-grid" style="margin-top:14px"><label><span class="label">Farm Name</span><input id="farmName" class="input" placeholder="e.g. Holthaus Farms"></label><label><span class="label">Main Contact</span><input id="mainContact" class="input" placeholder="e.g. John Holthaus"></label><label><span class="label">State</span><select id="state" class="select"><option value="">Select state</option><option value="KS">Kansas</option><option value="NE">Nebraska</option><option value="MO">Missouri</option><option value="IA">Iowa</option><option value="SD">South Dakota</option><option value="ND">North Dakota</option><option value="MN">Minnesota</option><option value="OK">Oklahoma</option><option value="CO">Colorado</option></select></label><label><span class="label">County</span><input id="county" class="input" placeholder="e.g. Nemaha"></label><label id="assignWrap" class="hidden"><span class="label">Assigned Salesperson</span><select id="assignedSalesperson" class="select"></select></label></div><div style="margin-top:14px"><span class="label">Mapping Method</span><div class="choice-row"><label class="choice"><input type="radio" name="mapping" value="draw" checked onchange="mappingChanged()"> <b>Draw a Field</b><div class="muted" style="font-size:12px;margin-top:5px">Create the prospect, then AcreFit opens the field drawing map immediately.</div></label><label class="choice"><input type="radio" name="mapping" value="mbar" onchange="mappingChanged()"> <b>Upload MBAR</b><div class="muted" style="font-size:12px;margin-top:5px">Create the prospect, then AcreFit takes you directly to MBAR field-map upload.</div></label></div></div><div id="practiceWrap" style="margin-top:12px"><span class="label">Field Practice</span><select id="practice" class="select" style="max-width:320px"><option value="NIRR" selected>NIRR — Non-Irrigated</option><option value="IRR">IRR — Irrigated</option></select></div><div style="display:flex;align-items:center;gap:10px;margin-top:14px"><button id="createBtn" class="btn" onclick="createProspect()">Create Prospect + Continue</button><span id="createMsg" class="muted" style="font-size:12px"></span></div></div><div class="card" style="margin-top:16px"><h2>Prospects</h2><p class="muted">Manual prospects and prospects created from uploaded farm data.</p><div id="list"><div class="empty">Loading prospects…</div></div></div></main></div>
 <script>
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-let me=null,team=[];
+let me=null,team=[];const pageOrgId=Number(new URLSearchParams(location.search).get('organization_id'))||null;
 function mappingChanged(){const v=document.querySelector('input[name="mapping"]:checked')?.value||'draw';document.getElementById('practiceWrap').classList.toggle('hidden',v!=='draw')}
 async function api(url,opt={}){const r=await fetch(url,opt);let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.detail||('HTTP '+r.status));return d}
 async function loadAccess(){
   me=await api('/api/auth/me');
-  if(me.role==='dealer_admin'){
-    const d=await api('/api/dealer/team');
+  if(me.role==='dealer_admin'||(me.role==='super_admin'&&pageOrgId)){
+    const url='/api/dealer/team'+(me.role==='super_admin'?'?organization_id='+pageOrgId:'');
+    const d=await api(url);
     team=d.users.filter(u=>u.status==='active'&&['dealer_admin','salesperson'].includes(u.role));
     document.getElementById('assignWrap').classList.remove('hidden');
     document.getElementById('assignedSalesperson').innerHTML=team.map(u=>`<option value="${u.id}" ${Number(u.id)===Number(me.id)?'selected':''}>${esc(u.display_name)}${Number(u.id)===Number(me.id)?' — Me':''}</option>`).join('');
@@ -19,7 +20,7 @@ async function loadAccess(){
 }
 async function loadProspects(){
   try{
-    const ps=await api('/api/prospects');
+    const ps=await api('/api/prospects'+(me?.role==='super_admin'&&pageOrgId?'?organization_id='+pageOrgId:''));
     document.getElementById('count').textContent=ps.length;
     document.getElementById('acres').textContent=Math.round(ps.reduce((s,p)=>s+Number(p.total_acres||0),0)).toLocaleString();
     document.getElementById('units').textContent=ps.reduce((s,p)=>s+Number(p.unit_count||0),0).toLocaleString();
@@ -30,6 +31,11 @@ async function createProspect(){
   const btn=document.getElementById('createBtn'),msg=document.getElementById('createMsg');
   const body={farm_name:document.getElementById('farmName').value.trim(),main_contact:document.getElementById('mainContact').value.trim(),state:document.getElementById('state').value,county:document.getElementById('county').value.trim()};
   if(me?.role==='dealer_admin') body.assigned_salesperson_id=Number(document.getElementById('assignedSalesperson').value)||me.id;
+  if(me?.role==='super_admin'){
+    if(!pageOrgId){msg.textContent='Open Prospects from a dealer workspace before creating a prospect.';return}
+    body.organization_id=pageOrgId;
+    body.assigned_salesperson_id=Number(document.getElementById('assignedSalesperson').value)||null;
+  }
   const mapping=document.querySelector('input[name="mapping"]:checked')?.value||'draw',practice=document.getElementById('practice').value||'NIRR';
   if(!body.farm_name||!body.main_contact||!body.state||!body.county){msg.textContent='Farm Name, Main Contact, State and County are required.';return}
   btn.disabled=true;msg.textContent='Creating prospect…';

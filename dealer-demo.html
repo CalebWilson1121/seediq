@@ -52,7 +52,8 @@ async function loadDashboard(){
  const s=dash.stats;
  kpis.innerHTML=[
  ['Active Sellers',s.active_salespeople],['Acres Under AcreFit',fmt(s.acres_under_acrefit)],['Pipeline Acres',fmt(s.pipeline_acres)],['Seed Units Planned',fmt(s.seed_units_planned,1)],
- ['Won Units',fmt(s.won_units,1)],['Estimated Seed Value',money(s.estimated_seed_value)],['Proposals Out',fmt(s.proposals_out)],['Won Farms',fmt(s.won_farms)]
+ ['Proposed Seed Revenue',money(s.proposed_seed_revenue)],['Proposed Gross Margin',money(s.proposed_gross_margin)],['Gross Margin %',fmt(s.gross_margin_pct,1)+'%'],['Won Gross Margin',money(s.won_gross_margin)],
+ ['Won Units',fmt(s.won_units,1)],['Proposals Out',fmt(s.proposals_out)],['Won Farms',fmt(s.won_farms)],['Products Missing Cost',fmt(s.products_missing_cost)]
  ].map(x=>`<div class="card"><div class="muted">${x[0]}</div><div class="metric">${x[1]}</div></div>`).join('');
  const sellers=dash.team.filter(u=>u.sales_enabled);
  leaderboard.innerHTML=`<table class="table"><tr><th>Seller</th><th>Role</th><th>Acres</th><th>Pipeline</th><th>Units</th><th>Won Units</th><th>Proposals</th><th>Active Time</th></tr>${sellers.length?sellers.map(u=>`<tr><td><a href="${profileUrl(u.id)}" style="font-weight:850;color:#17452d;text-decoration:none">${e(u.display_name)}</a></td><td>${e((u.role||'').replaceAll('_',' '))}</td><td>${fmt(u.acres)}</td><td>${fmt(u.pipeline_acres)}</td><td>${fmt(u.seed_units,1)}</td><td>${fmt(u.won_units,1)}</td><td>${fmt(u.proposals)}</td><td>${duration(u.active_seconds)}</td></tr>`).join(''):'<tr><td colspan="8" class="muted">No active sales books yet.</td></tr>'}</table>`;

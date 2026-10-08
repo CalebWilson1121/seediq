@@ -9,7 +9,7 @@
 .wrap{width:min(1020px,94vw);display:grid;grid-template-columns:1.05fr .95fr;background:#fff;border-radius:24px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.25)}
 .brand{background:#102a1d;color:#fff;padding:48px}.brand p{color:#b9cebf;line-height:1.55}.form{padding:42px}.muted{color:var(--muted)}
 .input{width:100%;padding:13px;border:1px solid var(--line);border-radius:10px;font:inherit;margin:6px 0 14px}.btn{width:100%;padding:13px;border:0;border-radius:10px;background:var(--green);color:#fff;font-weight:800;cursor:pointer}
-.roles{display:grid;grid-template-columns:1fr;gap:8px;margin:18px 0}.role{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fbfdfb;cursor:pointer}.role.active{border-color:var(--green);box-shadow:0 0 0 1px var(--green);background:#f5faf6}.role b{display:block}.role span{font-size:12px;color:var(--muted)}
+.roles{display:grid;grid-template-columns:1fr;gap:8px;margin:18px 0}.roles form{margin:0}.role{width:100%;text-align:left;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fbfdfb;cursor:pointer;font:inherit;color:inherit}.role:hover{border-color:var(--green);box-shadow:0 0 0 1px var(--green);background:#f5faf6}.role b{display:block}.role span{font-size:12px;color:var(--muted)}
 .error{color:#9c3735;margin-top:10px;font-size:13px}.security{margin-top:18px;padding:12px;border-radius:12px;background:#f5faf6;border:1px solid var(--line);font-size:12px;color:#45604d}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}.brand{padding:30px}.form{padding:30px}}
 </style>
@@ -27,11 +27,11 @@
 </section>
 <section class="form">
 <h2 style="margin-bottom:5px">Sign in to AcreFit</h2>
-<div class="muted">Choose your role, then use your AcreFit credentials.</div>
+<div class="muted">Demo mode: click a role to enter instantly. Manual login still works below.</div>
 <div class="roles">
-<div class="role" data-role="super_admin" onclick="chooseRole('super_admin')"><b>Super Admin</b><span>W5 / AcreFit platform administration</span></div>
-<div class="role" data-role="dealer_admin" onclick="chooseRole('dealer_admin')"><b>Dealer Admin</b><span>Manage dealership team, farms and pipeline</span></div>
-<div class="role active" data-role="salesperson" onclick="chooseRole('salesperson')"><b>Salesperson</b><span>Open only your assigned book and pipeline</span></div>
+<form method="post" action="/api/auth/demo-role/super_admin"><button class="role" type="submit"><b>Super Admin</b><span>W5 / AcreFit platform administration • Click to enter</span></button></form>
+<form method="post" action="/api/auth/demo-role/dealer_admin"><button class="role" type="submit"><b>Dealer Admin</b><span>Manage dealership team, farms and pipeline • Click to enter</span></button></form>
+<form method="post" action="/api/auth/demo-role/salesperson"><button class="role" type="submit"><b>Salesperson</b><span>Open only your assigned book and pipeline • Click to enter</span></button></form>
 </div>
 <input id="email" class="input" type="email" autocomplete="username" placeholder="Email">
 <input id="password" class="input" type="password" autocomplete="current-password" placeholder="Password">
@@ -41,15 +41,6 @@
 </section>
 </div>
 <script>
-let selectedRole='salesperson';
-const labels={super_admin:'Super Admin',dealer_admin:'Dealer Admin',salesperson:'Salesperson'};
-function chooseRole(role){
-  selectedRole=role;
-  document.querySelectorAll('.role').forEach(el=>el.classList.toggle('active',el.dataset.role===role));
-  document.getElementById('login').textContent='Sign In as '+labels[role];
-  document.getElementById('msg').textContent='';
-  document.getElementById('email').focus();
-}
 async function signIn(){
   const msg=document.getElementById('msg');
   msg.textContent='Signing in…';
@@ -57,10 +48,7 @@ async function signIn(){
   const d=await r.json();
   if(!r.ok){msg.textContent=d.detail||'Login failed';return}
   const actual=d.user.role||(d.user.global_role==='super_admin'?'super_admin':d.user.global_role==='dealer_admin'?'dealer_admin':'salesperson');
-  if(selectedRole!==actual){
-    msg.textContent='That account is a '+labels[actual]+'. Opening the correct workspace…';
-  }
-  setTimeout(()=>{location.href=actual==='super_admin'?'/admin.html':actual==='dealer_admin'?'/dealer-demo.html':'/pipeline.html'},selectedRole===actual?0:650);
+  location.href=actual==='super_admin'?'/admin.html':actual==='dealer_admin'?'/dealer-demo.html':'/pipeline.html';
 }
 document.getElementById('login').onclick=signIn;
 document.addEventListener('keydown',e=>{if(e.key==='Enter')signIn()});

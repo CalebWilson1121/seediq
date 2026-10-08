@@ -50,6 +50,23 @@ def _new_upload_ownership(user: dict) -> tuple[int, int, int]:
     return organization_id, int(salesperson["id"]), int(user["id"])
 
 
+
+def _require_target_farm(user: dict, farm_id: int) -> None:
+    with connect() as conn:
+        farm = conn.execute(
+            "SELECT id,organization_id,assigned_salesperson_id FROM farms WHERE id=?",
+            (farm_id,),
+        ).fetchone()
+    if not farm:
+        raise HTTPException(status_code=404, detail="Farm not found")
+    if user.get("global_role") == "super_admin":
+        return
+    if int(farm["organization_id"] or 0) != int(user.get("organization_id") or 0):
+        raise HTTPException(status_code=404, detail="Farm not found")
+    if user.get("global_role") == "dealer_user" and int(farm["assigned_salesperson_id"] or 0) != int(user["id"]):
+        raise HTTPException(status_code=404, detail="Farm not found")
+
+
 @router.post("/api/uploads/sign")
 def sign_large_upload(req: SignedUploadRequest, request: Request):
     _require_dealer(request)
@@ -68,6 +85,8 @@ def process_large_upload(req: ProcessUploadRequest, request: Request):
         # Auto-detect uploads often arrive with document_type=None, so the filename
         # is also used to recognize the mapped SOI source.
         is_soi = (req.document_type or "").upper() == "SOI" or "SOI" in req.original_name.upper()
+        if req.target_farm_id is not None:
+            _require_target_farm(user, int(req.target_farm_id))
         ownership = (None, None, None) if req.target_farm_id is not None else _new_upload_ownership(user)
         return ingest_signed_upload(
             req.object_path,

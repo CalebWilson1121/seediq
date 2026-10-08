@@ -168,15 +168,19 @@ def _catalog_org(conn, catalog_id: int) -> int:
     return int(row["organization_id"])
 
 
-def _prospect_scope(user: dict, scope: str | None = None) -> tuple[str, tuple]:
+def _prospect_scope(user: dict, scope: str | None = None, requested_organization_id: int | None = None) -> tuple[str, tuple]:
     role = _role(user)
     if role == "super_admin":
         if scope == "mine":
             return " WHERE p.assigned_salesperson_id=?", (int(user["id"]),)
+        if requested_organization_id is not None:
+            return " WHERE p.organization_id=?", (int(requested_organization_id),)
         return "", ()
     if user.get("organization_id") is None:
         raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
     organization_id = int(user["organization_id"])
+    if requested_organization_id is not None and int(requested_organization_id) != organization_id:
+        raise HTTPException(status_code=403, detail="You can only access your own dealership")
     if role == "dealer_admin" and scope != "mine":
         return " WHERE p.organization_id=?", (organization_id,)
     return " WHERE p.organization_id=? AND p.assigned_salesperson_id=?", (organization_id, int(user["id"]))
@@ -750,12 +754,12 @@ def create_prospect(req: ProspectCreateRequest, request: Request):
 
 
 @app.get("/api/prospects")
-def list_prospects(request: Request, scope: str | None = None):
+def list_prospects(request: Request, scope: str | None = None, organization_id: int | None = None):
     user = _user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Login required")
     try:
-        where_sql, params = _prospect_scope(user, scope)
+        where_sql, params = _prospect_scope(user, scope, organization_id)
         with connect() as conn:
             rows = conn.execute(
                 "SELECT p.*, f.producer_name, f.farm_name, "

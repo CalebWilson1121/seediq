@@ -34,20 +34,13 @@ def _require_dealer(request: Request):
 
 def _new_upload_ownership(user: dict) -> tuple[int, int, int]:
     if user.get("global_role") == "super_admin":
-        return 1, int(user["id"]), int(user["id"])
+        raise HTTPException(status_code=400, detail="Open a dealer workspace before uploading a new farm")
     organization_id = int(user.get("organization_id") or 0)
     if not organization_id:
         raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
-    if user.get("global_role") == "dealer_user":
+    if user.get("global_role") in ("dealer_user", "dealer_admin"):
         return organization_id, int(user["id"]), int(user["id"])
-    with connect() as conn:
-        salesperson = conn.execute(
-            "SELECT id FROM platform_users WHERE organization_id=? AND global_role='dealer_user' AND status='active' ORDER BY id LIMIT 1",
-            (organization_id,),
-        ).fetchone()
-    if not salesperson:
-        raise HTTPException(status_code=400, detail="Add an active salesperson before uploading a new farm")
-    return organization_id, int(salesperson["id"]), int(user["id"])
+    raise HTTPException(status_code=403, detail="This account cannot own dealer farm uploads")
 
 
 

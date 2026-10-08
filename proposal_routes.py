@@ -117,6 +117,12 @@ def create_or_update_proposal(prospect_id: int, req: ProposalCreateRequest):
         p = conn.execute("SELECT id,farm_id FROM prospects WHERE id=?", (prospect_id,)).fetchone()
         if not p:
             raise HTTPException(status_code=404, detail="Prospect not found")
+        pending_price = conn.execute(
+            "SELECT COUNT(*) AS n FROM price_approval_requests WHERE prospect_id=? AND crop_year=? AND status='pending'",
+            (prospect_id, req.crop_year),
+        ).fetchone()
+        if pending_price and int(pending_price["n"] or 0) > 0:
+            raise HTTPException(status_code=409, detail="A price override is still awaiting Dealer Admin approval. Resolve pricing before generating the farmer proposal.")
         existing = conn.execute("SELECT * FROM seed_proposals WHERE prospect_id=? AND crop_year=?", (prospect_id, req.crop_year)).fetchone()
         if existing:
             conn.execute(

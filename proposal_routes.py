@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from database import connect, row_to_dict, rows_to_dicts
+from pricing_service import refresh_farm_plan_prices
 
 router = APIRouter()
 BASE = Path(__file__).parent
@@ -31,6 +32,8 @@ class ApprovalRequest(BaseModel):
 
 
 def _proposal_summary(farm_id: int, crop_year: int) -> dict[str, Any]:
+    # Keep proposal economics synchronized with dealer/farmer pricing.
+    refresh_farm_plan_prices(farm_id, crop_year)
     with connect() as conn:
         rows = conn.execute(
             "SELECT f.id AS field_id,f.name AS field_name,f.acres,f.irrigation,cp.crop,cp.yield_goal,cp.target_population,cp.selected_seed_product_id,cp.seed_price_per_unit,cp.seeds_per_unit,cp.units_required,cp.seed_cost_per_acre,cp.total_seed_cost,sp.product_name,sp.brand,sp.trait_package,sp.relative_maturity "

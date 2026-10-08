@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from ai_service import run_ai_task
-from auth_service import admin_overview, create_dealer_user, current_user, dealer_demo_dashboard, dealer_detail, dealer_team, login, logout, require_role, reset_dealer_team_user_password, set_dealer_access, set_dealer_team_user_access, set_user_access
+from auth_service import admin_overview, create_dealer_user, current_user, dealer_demo_dashboard, dealer_detail, dealer_salesperson_profile, dealer_team, login, logout, require_role, reset_dealer_team_user_password, set_dealer_access, set_dealer_team_user_access, set_user_access, update_dealer_team_user
 from catalog_service import import_catalog, list_catalogs, list_organizations, list_products, publish_catalog
 from context_builder import build_farm_context
 from crop_plan_service import list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
@@ -39,6 +39,13 @@ class TeamUserRequest(BaseModel):
     email: str
     display_name: str
     role: str = "salesperson"
+
+class TeamUserUpdateRequest(BaseModel):
+    email: str
+    display_name: str
+
+class ActivityHeartbeatRequest(BaseModel):
+    path: str | None = None
 
 class AITaskRequest(BaseModel):
     task_type: str = "farm_summary"
@@ -413,6 +420,58 @@ def dealer_team_reset_password(user_id: int, request: Request):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+
+@app.get("/api/dealer/team/{user_id}/profile")
+def dealer_team_profile(user_id: int, request: Request):
+    user = _require(request, "dealer_admin")
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+    try:
+        return dealer_salesperson_profile(int(user["organization_id"]), user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.put("/api/dealer/team/{user_id}/profile")
+def dealer_team_profile_update(user_id: int, req: TeamUserUpdateRequest, request: Request):
+    user = _require(request, "dealer_admin")
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+    try:
+        return update_dealer_team_user(int(user["organization_id"]), user_id, req.display_name, req.email, int(user["id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.post("/api/activity/heartbeat")
+def activity_heartbeat(req: ActivityHeartbeatRequest, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    token = request.cookies.get(SESSION_COOKIE) or ""
+    if not token:
+        raise HTTPException(status_code=401, detail="Login required")
+    token_hash = __import__("hashlib").sha256(token.encode()).hexdigest()
+    path = (req.path or "")[:240]
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id,last_seen_at FROM user_activity_sessions WHERE user_id=? AND session_token_hash=? ORDER BY id DESC LIMIT 1",
+            (int(user["id"]), token_hash),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE user_activity_sessions SET "
+                "active_seconds=active_seconds + CASE WHEN last_seen_at >= CURRENT_TIMESTAMP - INTERVAL '90 seconds' THEN 60 ELSE 0 END,"
+                "page_views=page_views+1,last_seen_at=CURRENT_TIMESTAMP,last_path=? WHERE id=?",
+                (path, int(row["id"])),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO user_activity_sessions(user_id,session_token_hash,page_views,last_path) VALUES(?,?,1,?)",
+                (int(user["id"]), token_hash, path),
+            )
+    return {"ok": True}
+
 @app.post("/api/documents/upload")
 async def upload_document(file: Annotated[UploadFile, File(...)], request: Request, document_type: Annotated[str | None, Form()] = None, reprocess: Annotated[bool, Form()] = False, target_farm_id: Annotated[int | None, Form()] = None):
     user = _user(request)
@@ -752,7 +811,7 @@ def root(): return FileResponse(BASE / "index.html")
 
 @app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):
-    allowed = {"index", "login", "admin", "dealer-demo", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "product-spec", "data-hub"}
+    allowed = {"index", "login", "admin", "dealer-demo", "salesperson-profile", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "product-spec", "data-hub"}
     if page_name not in allowed: raise HTTPException(status_code=404)
     return FileResponse(BASE / f"{page_name}.html")
 

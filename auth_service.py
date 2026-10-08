@@ -273,8 +273,8 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
             "f.id AS farm_id,f.producer_name,u.display_name AS assigned_salesperson_name "
             "FROM prospects p JOIN farms f ON f.id=p.farm_id "
             "LEFT JOIN platform_users u ON u.id=p.assigned_salesperson_id WHERE " + where_sql + " "
-            "ORDER BY CASE WHEN p.prospect_name ILIKE '%AcreFit Demo%' THEN 0 ELSE 1 END, p.updated_at DESC",
-            params,
+            "ORDER BY CASE WHEN position(lower(?) in lower(p.prospect_name)) > 0 THEN 0 ELSE 1 END, p.updated_at DESC",
+            (*params, "AcreFit Demo"),
         ).fetchall())
         stats = conn.execute(
             "SELECT COUNT(*) AS prospects,COALESCE(SUM(total_acres),0) AS acres FROM prospects p WHERE " + where_sql,

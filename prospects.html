@@ -13,9 +13,9 @@ async function loadAccess(){
   if(me.role==='dealer_admin'||(me.role==='super_admin'&&pageOrgId)){
     const url='/api/dealer/team'+(me.role==='super_admin'?'?organization_id='+pageOrgId:'');
     const d=await api(url);
-    team=d.users.filter(u=>u.status==='active'&&['dealer_admin','salesperson'].includes(u.role));
+    team=d.users.filter(u=>u.status==='active'&&u.sales_enabled&&['dealer_admin','salesperson'].includes(u.role));
     document.getElementById('assignWrap').classList.remove('hidden');
-    document.getElementById('assignedSalesperson').innerHTML=team.map(u=>`<option value="${u.id}" ${Number(u.id)===Number(me.id)?'selected':''}>${esc(u.display_name)}${Number(u.id)===Number(me.id)?' — Me':''}</option>`).join('');
+    document.getElementById('assignedSalesperson').innerHTML=team.length?team.map(u=>`<option value="${u.id}" ${Number(u.id)===Number(me.id)?'selected':''}>${esc(u.display_name)}${Number(u.id)===Number(me.id)?' — Me':''}</option>`).join(''):'<option value="">No active sales books</option>';
   }
 }
 async function loadProspects(){

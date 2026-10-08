@@ -111,6 +111,65 @@ def list_dealer_prices(organization_id: int, crop_year: int) -> list[dict[str, A
     return rows_to_dicts(rows)
 
 
+def _refresh_plan_row(conn, plan: dict[str, Any], price: float, source: str = "farmer_pricing_profile") -> None:
+    acres = float(plan.get("acres") or 0)
+    population = float(plan.get("target_population") or 0)
+    seeds_per_unit = float(plan.get("seeds_per_unit") or plan.get("unit_size_seeds") or 0)
+    units_required = acres * population / seeds_per_unit if population and seeds_per_unit else None
+    seed_cost_per_acre = population / seeds_per_unit * price if population and seeds_per_unit else None
+    total_seed_cost = units_required * price if units_required is not None else None
+    conn.execute(
+        "UPDATE field_crop_plans SET seed_price_per_unit=?,pricing_source=?,seeds_per_unit=COALESCE(seeds_per_unit,?),"
+        "units_required=?,seed_cost_per_acre=?,total_seed_cost=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (
+            round(price, 2), source, int(seeds_per_unit) if seeds_per_unit else None,
+            round(units_required, 3) if units_required is not None else None,
+            round(seed_cost_per_acre, 2) if seed_cost_per_acre is not None else None,
+            round(total_seed_cost, 2) if total_seed_cost is not None else None,
+            int(plan["id"]),
+        ),
+    )
+
+
+def refresh_farm_plan_prices(farm_id: int, crop_year: int) -> int:
+    with connect() as conn:
+        plans = rows_to_dicts(conn.execute(
+            "SELECT cp.*,f.acres,sp.unit_size_seeds FROM field_crop_plans cp "
+            "JOIN fields f ON f.id=cp.field_id LEFT JOIN seed_products sp ON sp.id=cp.selected_seed_product_id "
+            "WHERE f.farm_id=? AND cp.crop_year=? AND cp.selected_seed_product_id IS NOT NULL "
+            "AND COALESCE(cp.pricing_source,'') NOT IN ('dealer_approved_override','dealer_counter_price')",
+            (farm_id, crop_year),
+        ).fetchall())
+        updated = 0
+        for plan in plans:
+            pricing = calculated_farmer_price(farm_id, crop_year, int(plan["selected_seed_product_id"]))
+            if not pricing.get("available"):
+                continue
+            _refresh_plan_row(conn, plan, float(pricing["calculated_price"]))
+            updated += 1
+    return updated
+
+
+def refresh_product_plan_prices(organization_id: int, crop_year: int, seed_product_id: int) -> int:
+    with connect() as conn:
+        plans = rows_to_dicts(conn.execute(
+            "SELECT cp.*,f.acres,f.farm_id,sp.unit_size_seeds FROM field_crop_plans cp "
+            "JOIN fields f ON f.id=cp.field_id JOIN farms fa ON fa.id=f.farm_id "
+            "LEFT JOIN seed_products sp ON sp.id=cp.selected_seed_product_id "
+            "WHERE fa.organization_id=? AND cp.crop_year=? AND cp.selected_seed_product_id=? "
+            "AND COALESCE(cp.pricing_source,'') NOT IN ('dealer_approved_override','dealer_counter_price')",
+            (organization_id, crop_year, seed_product_id),
+        ).fetchall())
+        updated = 0
+        for plan in plans:
+            pricing = calculated_farmer_price(int(plan["farm_id"]), crop_year, seed_product_id)
+            if not pricing.get("available"):
+                continue
+            _refresh_plan_row(conn, plan, float(pricing["calculated_price"]))
+            updated += 1
+    return updated
+
+
 def upsert_dealer_price(
     organization_id: int,
     crop_year: int,
@@ -142,7 +201,9 @@ def upsert_dealer_price(
             "WHERE dsp.organization_id=? AND dsp.crop_year=? AND dsp.seed_product_id=?",
             (organization_id, crop_year, seed_product_id),
         ).fetchone()
-    return row_to_dict(row) or {}
+    result = row_to_dict(row) or {}
+    result["plans_repriced"] = refresh_product_plan_prices(organization_id, crop_year, seed_product_id)
+    return result
 
 
 def get_farmer_profile(farm_id: int, crop_year: int) -> dict[str, Any]:
@@ -192,7 +253,9 @@ def upsert_farmer_profile(
                 loyalty_discount_per_unit, custom_discount_per_unit, pricing_tier, notes, updated_by_user_id,
             ),
         )
-    return get_farmer_profile(farm_id, crop_year)
+    result = get_farmer_profile(farm_id, crop_year)
+    result["plans_repriced"] = refresh_farm_plan_prices(farm_id, crop_year)
+    return result
 
 
 def calculated_farmer_price(farm_id: int, crop_year: int, seed_product_id: int) -> dict[str, Any]:

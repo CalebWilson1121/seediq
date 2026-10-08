@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from database import connect, row_to_dict, rows_to_dicts
+from pricing_service import refresh_farm_plan_prices
 from channel_fit_routes import _loads, _rank_products, _production_context, _whole_farm_reason_summary
 from climate_service import current_enso_outlook
 
@@ -36,6 +37,12 @@ def _build_field_book_data(token: str):
         if not proposal_row:
             raise HTTPException(status_code=404, detail="Proposal not found")
         proposal = row_to_dict(proposal_row) or {}
+
+    # Self-heal legacy/stale plan rows so Sales Package always reflects the
+    # dealer price book + farmer pricing profile unless an approved override exists.
+    refresh_farm_plan_prices(int(proposal["farm_id"]), int(proposal["crop_year"]))
+
+    with connect() as conn:
         rows = conn.execute(
             "SELECT f.id AS field_id,f.name AS field_name,f.acres,f.crop AS field_crop,f.irrigation,"
             "cp.crop,cp.yield_goal,cp.target_population,cp.seed_price_per_unit,cp.seeds_per_unit,"

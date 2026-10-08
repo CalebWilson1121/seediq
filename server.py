@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from ai_service import run_ai_task
-from auth_service import admin_overview, create_dealer_user, current_user, dealer_demo_dashboard, dealer_detail, dealer_team, login, logout, require_role, set_dealer_access, set_dealer_team_user_access, set_user_access
+from auth_service import admin_overview, create_dealer_user, current_user, dealer_demo_dashboard, dealer_detail, dealer_team, login, logout, require_role, reset_dealer_team_user_password, set_dealer_access, set_dealer_team_user_access, set_user_access
 from catalog_service import import_catalog, list_catalogs, list_organizations, list_products, publish_catalog
 from context_builder import build_farm_context
 from crop_plan_service import list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
@@ -401,6 +401,17 @@ def dealer_team_user_access(user_id: int, req: AccessRequest, request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/dealer/team/{user_id}/reset-password")
+def dealer_team_reset_password(user_id: int, request: Request):
+    user = _require(request, "dealer_admin")
+    if user.get("organization_id") is None:
+        raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
+    try:
+        return reset_dealer_team_user_password(int(user["organization_id"]), user_id, int(user["id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.post("/api/documents/upload")
 async def upload_document(file: Annotated[UploadFile, File(...)], request: Request, document_type: Annotated[str | None, Form()] = None, reprocess: Annotated[bool, Form()] = False, target_farm_id: Annotated[int | None, Form()] = None):

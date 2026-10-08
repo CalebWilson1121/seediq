@@ -323,13 +323,40 @@ def dealer_team_user_access(user_id: int, req: AccessRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.post("/api/documents/upload")
-async def upload_document(file: Annotated[UploadFile, File(...)], document_type: Annotated[str | None, Form()] = None, reprocess: Annotated[bool, Form()] = False, target_farm_id: Annotated[int | None, Form()] = None):
+async def upload_document(file: Annotated[UploadFile, File(...)], request: Request, document_type: Annotated[str | None, Form()] = None, reprocess: Annotated[bool, Form()] = False, target_farm_id: Annotated[int | None, Form()] = None):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    organization_id = assigned_salesperson_id = created_by_user_id = None
+    if target_farm_id is None:
+        if _role(user) == "super_admin":
+            organization_id = 1
+            assigned_salesperson_id = int(user["id"])
+            created_by_user_id = int(user["id"])
+        else:
+            if user.get("organization_id") is None:
+                raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
+            organization_id = int(user["organization_id"])
+            with connect() as conn:
+                assigned_salesperson_id = _resolve_salesperson(conn, user, organization_id)
+            created_by_user_id = int(user["id"])
     suffix = Path(file.filename or "upload.bin").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp" if os.path.isdir("/tmp") else None) as tmp:
         tmp.write(await file.read())
         temp_path = Path(tmp.name)
     try:
-        return ingest_file(temp_path, file.filename or "upload.bin", document_type, reprocess=reprocess, target_farm_id=target_farm_id)
+        return ingest_file(
+            temp_path,
+            file.filename or "upload.bin",
+            document_type,
+            reprocess=reprocess,
+            target_farm_id=target_farm_id,
+            organization_id=organization_id,
+            assigned_salesperson_id=assigned_salesperson_id,
+            created_by_user_id=created_by_user_id,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         print(f"AcreFit upload error: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(status_code=400, detail=f"The document could not be imported: {str(exc)[:220]}") from exc

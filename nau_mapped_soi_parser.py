@@ -422,11 +422,21 @@ def _component_geometry(comp: _RasterComponent, frame_small: tuple[int, int, int
     return mapping(geo)
 
 
+def _source_crop_year(text: str) -> int | None:
+    matches = re.findall(r"\b(20\d{2})\s+Total\s+Prod", text, re.I)
+    if matches:
+        return max(int(x) for x in matches)
+    years = [int(x) for x in re.findall(r"\b(20\d{2})\b", text)]
+    plausible = [x for x in years if 2020 <= x <= 2100]
+    return max(plausible) if plausible else None
+
+
 def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
     reader = PdfReader(str(path))
     page_texts = [(page.extract_text() or "") for page in reader.pages]
     full_text = "\n".join(page_texts)
     unit_memberships = _unit_memberships(full_text)
+    source_crop_year = _source_crop_year(full_text)
     out = ParsedDocument(document_type="SOI", producer_name=_producer_name(full_text), raw_preview=full_text[:6000])
     out.farm_name = out.producer_name
     out.policy_number = None
@@ -483,6 +493,7 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
             metadata: dict[str, Any] = {
                 "source": "NAU Mapped SOI",
                 "parser_version": VERSION,
+                "source_crop_year": source_crop_year,
                 "source_page": entry.page,
                 "source_field_location_id": entry.nau_id,
                 "legal_section": entry.section,

@@ -384,8 +384,8 @@ def dealer_salesperson_profile(organization_id: int, user_id: int, crop_year: in
 
         proposals = conn.execute(
             "SELECT COUNT(*) AS total,"
-            "COUNT(*) FILTER (WHERE status IN ('ready','sent','viewed')) AS active,"
-            "COUNT(*) FILTER (WHERE status='approved') AS approved "
+            "COUNT(*) FILTER (WHERE sp.status IN ('ready','sent','viewed')) AS active,"
+            "COUNT(*) FILTER (WHERE sp.status='approved') AS approved "
             "FROM seed_proposals sp JOIN prospects p ON p.id=sp.prospect_id "
             "WHERE p.organization_id=? AND p.assigned_salesperson_id=? AND sp.crop_year=?",
             (organization_id, user_id, crop_year),

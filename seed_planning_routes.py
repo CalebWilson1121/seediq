@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import connect, row_to_dict, rows_to_dicts
+from pricing_service import calculated_farmer_price, latest_field_price_request
 
 router = APIRouter()
 
@@ -62,7 +63,24 @@ def save_field_seed_plan(field_id: int, req: FieldSeedPlanRequest):
                 raise HTTPException(status_code=400, detail="Seed product not found")
         population = req.target_population or (int(product["population_target"]) if product and product.get("population_target") else None)
         seeds_per_unit = req.seeds_per_unit or (int(product["unit_size_seeds"]) if product and product.get("unit_size_seeds") else None) or _default_unit_size(crop or (product.get("crop") if product else None))
-        econ = _economics(float(field.get("acres") or 0), population, req.seed_price_per_unit, seeds_per_unit)
+
+        effective_price = req.seed_price_per_unit
+        effective_source = req.pricing_source
+        if req.seed_product_id is not None:
+            farm_row = conn.execute("SELECT farm_id FROM fields WHERE id=?", (field_id,)).fetchone()
+            standard = calculated_farmer_price(int(farm_row["farm_id"]), req.crop_year, int(req.seed_product_id))
+            approved_existing = bool(existing and existing.get("selected_seed_product_id") == req.seed_product_id and str(existing.get("pricing_source") or "") in {"dealer_approved_override","dealer_counter_price"})
+            if approved_existing:
+                effective_price = existing.get("seed_price_per_unit")
+                effective_source = existing.get("pricing_source")
+            elif standard.get("available"):
+                standard_price = float(standard["calculated_price"])
+                if req.seed_price_per_unit is not None and abs(float(req.seed_price_per_unit)-standard_price) > 0.01:
+                    raise HTTPException(status_code=400, detail="Use Request Price Override for a price different from the calculated farmer price.")
+                effective_price = standard_price
+                effective_source = "farmer_pricing_profile"
+
+        econ = _economics(float(field.get("acres") or 0), population, effective_price, seeds_per_unit)
         if not existing:
             conn.execute(
                 "INSERT INTO field_crop_plans(field_id,crop_year,crop,source,status) VALUES(?,?,?,?,?)",
@@ -71,8 +89,8 @@ def save_field_seed_plan(field_id: int, req: FieldSeedPlanRequest):
         conn.execute(
             "UPDATE field_crop_plans SET yield_goal=?,target_population=?,selected_seed_product_id=?,seed_price_per_unit=?,seeds_per_unit=?,units_required=?,seed_cost_per_acre=?,total_seed_cost=?,pricing_source=?,notes=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
             (
-                req.yield_goal, population, req.seed_product_id, req.seed_price_per_unit, seeds_per_unit,
-                econ["units_required"], econ["seed_cost_per_acre"], econ["total_seed_cost"], req.pricing_source,
+                req.yield_goal, population, req.seed_product_id, effective_price, seeds_per_unit,
+                econ["units_required"], econ["seed_cost_per_acre"], econ["total_seed_cost"], effective_source,
                 req.notes, "seed_selected" if req.seed_product_id else "planning", field_id, req.crop_year,
             ),
         )
@@ -82,6 +100,12 @@ def save_field_seed_plan(field_id: int, req: FieldSeedPlanRequest):
         ).fetchone()
     result = row_to_dict(row) or {}
     result["sold_units"] = econ["sold_units"]
+    if result.get("selected_seed_product_id"):
+        try:
+            result["standard_pricing"] = calculated_farmer_price(int(field["id"] and conn.execute("SELECT farm_id FROM fields WHERE id=?", (field_id,)).fetchone()["farm_id"]), req.crop_year, int(result["selected_seed_product_id"]))
+        except Exception:
+            result["standard_pricing"] = None
+        result["price_request"] = latest_field_price_request(field_id, req.crop_year)
     return result
 
 

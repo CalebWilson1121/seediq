@@ -1043,7 +1043,7 @@ def root(): return FileResponse(BASE / "index.html")
 
 @app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):
-    allowed = {"index", "login", "admin", "dealer-demo", "salesperson-profile", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "product-spec", "data-hub"}
+    allowed = {"index", "login", "admin", "dealer-demo", "salesperson-profile", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "pricing", "product-spec", "data-hub"}
     if page_name not in allowed: raise HTTPException(status_code=404)
     return FileResponse(BASE / f"{page_name}.html")
 

@@ -387,14 +387,20 @@ def auth_login(req: LoginRequest, response: Response):
     return result
 
 @app.post("/api/auth/demo-role/{role}")
-def auth_demo_role(role: str, response: Response):
+def auth_demo_role(role: str):
     if os.getenv("ACREFIT_DEMO_MODE") != "1":
         raise HTTPException(status_code=404, detail="Not found")
-    allowed = {"super_admin", "dealer_admin", "salesperson"}
-    if role not in allowed:
+    destinations = {
+        "super_admin": "/admin.html",
+        "dealer_admin": "/dealer-demo.html",
+        "salesperson": "/pipeline.html",
+    }
+    destination = destinations.get(role)
+    if not destination:
         raise HTTPException(status_code=404, detail="Unknown demo role")
+    response = RedirectResponse(url=destination, status_code=303)
     response.set_cookie("acrefit_demo_role", role, max_age=12*3600, httponly=True, secure=True, samesite="lax", path="/")
-    return {"ok": True, "role": role}
+    return response
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request, response: Response):

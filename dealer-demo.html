@@ -28,7 +28,8 @@ nav{display:grid;gap:7px;margin-top:28px}nav a{color:#dce8df;text-decoration:non
  <div class="card" style="margin-top:16px"><div class="row"><div><h2 style="margin:0">Dealer Pipeline</h2><div class="muted small">Current prospects and ownership across the dealership.</div></div><a class="btn alt" href="/pipeline.html">Open Pipeline</a></div><div id="farms" style="margin-top:10px"></div></div>
 </div>
 <div>
- <div class="card" id="myBookCard" style="display:none"><h2 style="margin-top:0">My Book</h2><div class="muted">Dealer Admin access does not replace your selling book. Your personal production stays separately measurable.</div><div id="myBookStats" style="margin:12px 0"></div><a id="myBookLink" class="btn" href="#">Open My Book</a></div>
+ <div class="card" id="pricingTaskCard"><div class="row"><div><h2 style="margin:0">Pricing Approvals</h2><div class="muted small">Salesperson price exceptions needing Dealer Admin action.</div></div><a id="pricingTaskLink" class="btn alt" href="/pricing.html">Open Pricing</a></div><div id="pricingTaskSummary" style="margin-top:12px" class="muted">Loading pricing tasks…</div></div>
+ <div class="card" id="myBookCard" style="display:none;margin-top:16px"><h2 style="margin-top:0">My Book</h2><div class="muted">Dealer Admin access does not replace your selling book. Your personal production stays separately measurable.</div><div id="myBookStats" style="margin:12px 0"></div><a id="myBookLink" class="btn" href="#">Open My Book</a></div>
  <div class="card" style="margin-top:16px"><h2 style="margin-top:0">Business Snapshot</h2><div id="snapshot"></div></div>
 </div></div>
 <div id="team" class="card" style="margin-top:16px"><div class="row"><div><h2 style="margin:0">Sales Team</h2><div id="seatText" class="muted"></div></div></div><div id="teamMsg" style="margin-top:10px"></div><div id="addWrap" class="formgrid" style="margin-top:12px"><label><div class="small muted">NAME</div><input id="personName" class="input" placeholder="Salesperson name"></label><label><div class="small muted">EMAIL</div><input id="personEmail" class="input" placeholder="name@dealer.com"></label><label><div class="small muted">ROLE</div><select id="personRole" class="select"><option value="salesperson">Salesperson</option><option value="dealer_admin">Dealer Admin</option></select></label><label><div class="small muted">SALES BOOK</div><select id="personSales" class="select"><option value="true" selected>Yes</option><option value="false">No</option></select></label><button id="addPerson" class="btn">Add Team Member</button></div><div id="teamTable" style="margin-top:12px"></div></div>
@@ -44,8 +45,10 @@ function orgQuery(){return orgId?'&organization_id='+orgId:''}
 function profileUrl(id){return '/salesperson-profile.html?id='+id+'&year='+year.value+(orgId?'&organization_id='+orgId:'')}
 async function loadDashboard(){
  const y=Number(year.value);
- dash=await api('/api/dealer/dashboard?crop_year='+y+orgQuery());
+ const [dashResult,priceTaskResult]=await Promise.all([api('/api/dealer/dashboard?crop_year='+y+orgQuery()),api('/api/dealer/price-approvals?status=pending'+orgQuery()).catch(()=>({requests:[]}))]);dash=dashResult;const pendingPriceRequests=priceTaskResult.requests||[];
  dealerName.textContent=dash.dealer.name;
+ pricingTaskSummary.innerHTML=pendingPriceRequests.length?`<b style="font-size:26px;color:#9a6a12">${pendingPriceRequests.length}</b> pending approval${pendingPriceRequests.length===1?'':'s'}<br><span class="small">Review requested farmer prices before they flow into approved proposals.</span>`:'<span class="tag">No pending price approvals</span>';
+ pricingTaskLink.href='/pricing.html'+(orgId?'?organization_id='+orgId:'');
  const s=dash.stats;
  kpis.innerHTML=[
  ['Active Sellers',s.active_salespeople],['Acres Under AcreFit',fmt(s.acres_under_acrefit)],['Pipeline Acres',fmt(s.pipeline_acres)],['Seed Units Planned',fmt(s.seed_units_planned,1)],

@@ -38,9 +38,19 @@ def _new_upload_ownership(user: dict) -> tuple[int, int, int]:
     organization_id = int(user.get("organization_id") or 0)
     if not organization_id:
         raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
-    if user.get("global_role") in ("dealer_user", "dealer_admin"):
+    if user.get("global_role") in ("dealer_user", "dealer_admin") and bool(user.get("sales_enabled")):
         return organization_id, int(user["id"]), int(user["id"])
-    raise HTTPException(status_code=403, detail="This account cannot own dealer farm uploads")
+    if user.get("global_role") == "dealer_admin":
+        with connect() as conn:
+            seller = conn.execute(
+                "SELECT id FROM platform_users WHERE organization_id=? AND status='active' AND sales_enabled=true "
+                "ORDER BY CASE WHEN global_role='dealer_admin' THEN 0 ELSE 1 END,id LIMIT 1",
+                (organization_id,),
+            ).fetchone()
+        if seller:
+            return organization_id, int(seller["id"]), int(user["id"])
+        raise HTTPException(status_code=400, detail="Add or select an active salesperson before uploading a new farm")
+    raise HTTPException(status_code=403, detail="This account does not have an active sales book")
 
 
 

@@ -39,10 +39,12 @@ class TeamUserRequest(BaseModel):
     email: str
     display_name: str
     role: str = "salesperson"
+    sales_enabled: bool = True
 
 class TeamUserUpdateRequest(BaseModel):
     email: str
     display_name: str
+    sales_enabled: bool | None = None
 
 class ActivityHeartbeatRequest(BaseModel):
     path: str | None = None
@@ -123,21 +125,30 @@ def _resolve_salesperson(conn, user: dict, organization_id: int, requested_id: i
         return int(user["id"])
     if requested_id is not None:
         target = conn.execute(
-            "SELECT id,organization_id,global_role,status FROM platform_users WHERE id=?",
+            "SELECT id,organization_id,global_role,status,sales_enabled FROM platform_users WHERE id=?",
             (requested_id,),
         ).fetchone()
         if not target or target["status"] != "active":
             raise HTTPException(status_code=400, detail="Assigned salesperson is unavailable")
-        if target["global_role"] not in ("dealer_user", "dealer_admin"):
-            raise HTTPException(status_code=400, detail="Assigned user must be a dealer salesperson or dealer admin")
+        if target["global_role"] not in ("dealer_user", "dealer_admin") or not bool(target["sales_enabled"]):
+            raise HTTPException(status_code=400, detail="Assigned user does not have an active sales book")
         if int(target["organization_id"] or 0) != int(organization_id):
             raise HTTPException(status_code=403, detail="Assigned salesperson must belong to the same dealership")
         return int(target["id"])
     if role == "dealer_admin":
-        return int(user["id"])
+        if bool(user.get("sales_enabled")):
+            return int(user["id"])
+        target = conn.execute(
+            "SELECT id FROM platform_users WHERE organization_id=? AND status='active' AND sales_enabled=true "
+            "ORDER BY CASE WHEN global_role='dealer_admin' THEN 0 ELSE 1 END,id LIMIT 1",
+            (organization_id,),
+        ).fetchone()
+        if not target:
+            raise HTTPException(status_code=400, detail="Choose or add an active salesperson before creating this prospect")
+        return int(target["id"])
     if role == "super_admin":
         target = conn.execute(
-            "SELECT id FROM platform_users WHERE organization_id=? AND status='active' AND global_role IN ('dealer_admin','dealer_user') "
+            "SELECT id FROM platform_users WHERE organization_id=? AND status='active' AND sales_enabled=true AND global_role IN ('dealer_admin','dealer_user') "
             "ORDER BY CASE WHEN global_role='dealer_admin' THEN 0 ELSE 1 END,id LIMIT 1",
             (organization_id,),
         ).fetchone()
@@ -420,7 +431,7 @@ def add_dealer_team_user(req: TeamUserRequest, request: Request):
     if user.get("organization_id") is None:
         raise HTTPException(status_code=400, detail="No dealer organization is assigned to this account")
     try:
-        return create_dealer_user(int(user["organization_id"]), req.email, req.display_name, req.role, int(user["id"]))
+        return create_dealer_user(int(user["organization_id"]), req.email, req.display_name, req.role, int(user["id"]), req.sales_enabled)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -463,7 +474,7 @@ def dealer_team_profile_update(user_id: int, req: TeamUserUpdateRequest, request
     user = _require(request, "super_admin", "dealer_admin")
     org_id = _dealer_org_for_user(user, organization_id)
     try:
-        return update_dealer_team_user(org_id, user_id, req.display_name, req.email, int(user["id"]))
+        return update_dealer_team_user(org_id, user_id, req.display_name, req.email, int(user["id"]), req.sales_enabled)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

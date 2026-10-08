@@ -20,7 +20,7 @@ from context_builder import build_farm_context
 from crop_plan_service import apply_soi_crop_rotation, list_field_plans, rotate_farm, rotate_field, select_seed, set_crop
 from database import backend_name, connect, init_db, row_to_dict, rows_to_dicts
 from ingestion import ingest_file
-from pricing_service import calculated_farmer_price, create_price_override, get_farmer_profile, latest_field_price_request, list_dealer_prices, list_price_requests, review_price_request, upsert_dealer_price, upsert_farmer_profile
+from pricing_service import calculated_farmer_price, create_price_override, get_farmer_profile, import_price_sheet, latest_field_price_request, list_dealer_prices, list_price_requests, review_price_request, upsert_dealer_price, upsert_farmer_profile
 from seed_engine import rank_seeds
 from soil_service import enrich_field, enrich_prospect, prospect_soil_status
 
@@ -503,6 +503,29 @@ def dealer_pricing_update(req: DealerSeedPriceRequest, request: Request, organiz
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/api/dealer/pricing/upload")
+async def dealer_pricing_upload(
+    request: Request,
+    file: Annotated[UploadFile, File(...)],
+    crop_year: Annotated[int, Form()],
+    organization_id: Annotated[int | None, Form()] = None,
+):
+    user = _require(request, "super_admin", "dealer_admin")
+    org_id = _dealer_org_for_user(user, organization_id)
+    suffix = Path(file.filename or "pricing.xlsx").suffix.lower()
+    if suffix not in {".xlsx", ".xlsm", ".csv"}:
+        raise HTTPException(status_code=400, detail="Upload an .xlsx or .csv pricing file")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp" if os.path.isdir("/tmp") else None) as tmp:
+        tmp.write(await file.read())
+        temp_path = Path(tmp.name)
+    try:
+        return import_price_sheet(temp_path, org_id, crop_year)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 @app.get("/api/farms/{farm_id}/pricing-profile")
 def farm_pricing_profile(farm_id: int, crop_year: int, request: Request):

@@ -27,6 +27,82 @@ def _temporary_password() -> str:
     return f"AcreFit-{core}!"
 
 
+def ensure_salesperson_demo() -> int:
+    """Ensure a dedicated read/write demo salesperson exists in the demo dealership."""
+    email = "salesperson-demo@acrefit.local"
+    display_name = "AcreFit Salesperson Demo"
+    organization_id = 2
+    with connect() as conn:
+        user = conn.execute("SELECT id FROM platform_users WHERE lower(email)=?", (email,)).fetchone()
+        if user:
+            user_id = int(user["id"])
+            conn.execute(
+                "UPDATE platform_users SET display_name=?,global_role='dealer_user',status='active',organization_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (display_name, organization_id, user_id),
+            )
+        else:
+            salt = secrets.token_hex(16)
+            unusable_password = secrets.token_urlsafe(48)
+            password_hash = _password_hash(unusable_password, salt)
+            user = conn.execute(
+                "INSERT INTO platform_users(email,display_name,password_salt,password_hash,global_role,status,organization_id) "
+                "VALUES(?,?,?,?, 'dealer_user','active',?) RETURNING id",
+                (email, display_name, salt, password_hash, organization_id),
+            ).fetchone()
+            user_id = int(user["id"])
+        conn.execute(
+            "INSERT INTO dealer_members(organization_id,email,display_name,role,status,platform_user_id,metadata_json) "
+            "VALUES(?,?,?,'salesperson','active',?,'{}'::jsonb) ON CONFLICT DO NOTHING",
+            (organization_id, email, display_name, user_id),
+        )
+        for prospect_id in (1, 2, 28):
+            row = conn.execute(
+                "SELECT farm_id FROM prospects WHERE id=? AND organization_id=?",
+                (prospect_id, organization_id),
+            ).fetchone()
+            if not row:
+                continue
+            conn.execute(
+                "UPDATE prospects SET assigned_salesperson_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (user_id, prospect_id),
+            )
+            conn.execute(
+                "UPDATE farms SET assigned_salesperson_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (user_id, int(row["farm_id"])),
+            )
+    return user_id
+
+
+def launch_salesperson_demo() -> dict[str, Any]:
+    user_id = ensure_salesperson_demo()
+    with connect() as conn:
+        user = conn.execute(
+            "SELECT u.*,o.name AS organization_name FROM platform_users u "
+            "LEFT JOIN dealer_organizations o ON o.id=u.organization_id WHERE u.id=?",
+            (user_id,),
+        ).fetchone()
+        token = secrets.token_urlsafe(36)
+        expires = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
+        conn.execute(
+            "INSERT INTO user_sessions(user_id,token_hash,expires_at) VALUES(?,?,?)",
+            (user_id, _token_hash(token), expires),
+        )
+        conn.execute("UPDATE platform_users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?", (user_id,))
+    return {
+        "token": token,
+        "expires_at": expires.isoformat(),
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "display_name": user["display_name"],
+            "global_role": user["global_role"],
+            "role": "salesperson",
+            "organization_id": user["organization_id"],
+            "organization_name": user["organization_name"],
+        },
+    }
+
+
 def effective_role(user: dict[str, Any] | Any) -> str:
     global_role = user["global_role"] if not isinstance(user, dict) else user.get("global_role")
     if global_role == "super_admin":

@@ -1038,7 +1038,14 @@ def set_field_rm_preference(field_id: int, req: RMPreferenceRequest):
 
 
 @router.post("/api/farms/{farm_id}/channel-auto-plan")
-def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
+def channel_auto_plan(farm_id: int, req: AutoPlanRequest, request: Request):
+    farmer_mode = request.cookies.get("acrefit_demo_role") == "farmer"
+    if not farmer_mode:
+        try:
+            current = current_user(request.cookies.get("seediq_session"))
+            farmer_mode = bool(current and current.get("global_role") in {"farmer_admin", "farmer_user"})
+        except Exception:
+            farmer_mode = False
     with connect() as conn:
         farm = conn.execute("SELECT id,organization_id,default_tillage,default_row_spacing,default_planting_window FROM farms WHERE id=?", (farm_id,)).fetchone()
         if not farm:
@@ -1048,22 +1055,34 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
             "FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.farm_id=? ORDER BY f.name",
             (req.crop_year, farm_id),
         ).fetchall())
-        all_products = rows_to_dicts(conn.execute(
-            "SELECT sp.*,dsp.list_price,dsp.base_price,dsp.dealer_cost "
-            "FROM seed_products sp "
-            "LEFT JOIN dealer_seed_prices dsp ON dsp.seed_product_id=sp.id AND dsp.organization_id=? AND dsp.crop_year=? AND dsp.status='active' "
-            "WHERE sp.brand='Channel' AND sp.active=true AND sp.crop_year=? AND (sp.organization_id=? OR ? IS NULL) "
-            "ORDER BY sp.crop,sp.relative_maturity,sp.product_name",
-            (farm.get("organization_id"), req.crop_year, req.crop_year, farm.get("organization_id"), farm.get("organization_id")),
-        ).fetchall())
-        profile = conn.execute(
-            "SELECT volume_discount_pct,early_pay_discount_pct,loyalty_discount_per_unit,custom_discount_per_unit,pricing_tier "
-            "FROM farmer_pricing_profiles WHERE farm_id=? AND crop_year=?",
-            (farm_id, req.crop_year),
-        ).fetchone()
-        profile = dict(profile) if profile else {}
-        for p in all_products:
-            p.update(profile)
+        if farmer_mode:
+            all_products = rows_to_dicts(conn.execute(
+                "SELECT sp.*,NULL::numeric AS list_price,NULL::numeric AS base_price,NULL::numeric AS dealer_cost,"
+                "0::numeric AS volume_discount_pct,0::numeric AS early_pay_discount_pct,"
+                "0::numeric AS loyalty_discount_per_unit,0::numeric AS custom_discount_per_unit,"
+                "NULL::text AS pricing_tier "
+                "FROM seed_products sp "
+                "WHERE sp.active=true AND sp.crop_year=? "
+                "ORDER BY sp.crop,sp.brand,sp.relative_maturity,sp.product_name",
+                (req.crop_year,),
+            ).fetchall())
+        else:
+            all_products = rows_to_dicts(conn.execute(
+                "SELECT sp.*,dsp.list_price,dsp.base_price,dsp.dealer_cost "
+                "FROM seed_products sp "
+                "LEFT JOIN dealer_seed_prices dsp ON dsp.seed_product_id=sp.id AND dsp.organization_id=? AND dsp.crop_year=? AND dsp.status='active' "
+                "WHERE sp.brand='Channel' AND sp.active=true AND sp.crop_year=? AND (sp.organization_id=? OR ? IS NULL) "
+                "ORDER BY sp.crop,sp.relative_maturity,sp.product_name",
+                (farm.get("organization_id"), req.crop_year, req.crop_year, farm.get("organization_id"), farm.get("organization_id")),
+            ).fetchall())
+            profile = conn.execute(
+                "SELECT volume_discount_pct,early_pay_discount_pct,loyalty_discount_per_unit,custom_discount_per_unit,pricing_tier "
+                "FROM farmer_pricing_profiles WHERE farm_id=? AND crop_year=?",
+                (farm_id, req.crop_year),
+            ).fetchone()
+            profile = dict(profile) if profile else {}
+            for p in all_products:
+                p.update(profile)
         products_by_crop: dict[str, list[dict[str, Any]]] = {"CORN": [], "SOYBEANS": []}
         for p in all_products:
             c = _normalize_crop(p.get("crop"))
@@ -1162,5 +1181,5 @@ def channel_auto_plan(farm_id: int, req: AutoPlanRequest):
         "skipped_no_products": skipped_no_products,
         "yield_goals_backfilled": yield_goals_backfilled,
         "assignments": assignments,
-        "method": f"Hard field-location maturity gate first; then Channel fit blended with neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}), SSURGO, IRR/NIRR, product ratings, farm management and matched APH/weather history. Products outside the local maturity window cannot be auto-selected.",
+        "method": f"Hard field-location maturity gate first; then {'multi-brand Farmer' if farmer_mode else 'Channel dealer'} fit blended with neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}), SSURGO, IRR/NIRR, product ratings, farm management and matched APH/weather history. Products outside the local maturity window cannot be auto-selected.",
     }

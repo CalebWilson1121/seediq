@@ -157,14 +157,14 @@ def parse_document(path: Path, forced_type: str | None = None) -> tuple[ParsedDo
     if ext == ".pdf":
         from nau_mapped_soi_parser import looks_like_nau_mapped_soi, parse_nau_mapped_soi_pdf
         if looks_like_nau_mapped_soi(preview):
-            return parse_nau_mapped_soi_pdf(path), "nau-mapped-soi-v0.1"
+            return parse_nau_mapped_soi_pdf(path), "nau-mapped-soi-v0.4"
 
     if doc_type == "MBAR":
         from mbar_parser import parse_mbar_pdf_text, parse_mbar_rows
         if ext in {".csv", ".xlsx", ".xlsm", ".json"}:
             parsed = parse_mbar_rows(read_tabular(path))
             parsed.raw_preview = preview[:6000] if preview else None
-            return parsed, "mbar-fields-v0.1"
+            return parsed, "mbar-fields-v0.2"
         if ext == ".pdf":
             return parse_mbar_pdf_text(preview), "mbar-pdf-starter-v0.1"
 

@@ -9,12 +9,12 @@ from typing import Any
 import numpy as np
 from PIL import Image
 from pypdf import PdfReader
-from shapely.geometry import box, mapping, shape
+from shapely.geometry import Point, box, mapping, shape
 from shapely.ops import transform, unary_union
 
 from models import ParsedDocument, ParsedField, SourceFact
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 FIELD_RE = re.compile(
     r"f(?P<nau>\d+)\s+F(?P<farm>\d+)-T(?P<tract>\d+)-(?P<field>\d+)\s+(?P<acres>[0-9.]+)A",
@@ -49,6 +49,8 @@ class _RasterComponent:
     area: int
     runs: list[tuple[int, int, int]]
     estimated_acres: float = 0.0
+    centroid_x: float = 0.0
+    centroid_y: float = 0.0
 
 
 def _practice_bucket(value: Any) -> str:
@@ -273,19 +275,134 @@ def _section_frame(image: Image.Image) -> tuple[int, int, int, int]:
     return left, top, right, bottom
 
 
+
+def _geometry_acres(geojson: dict[str, Any] | None) -> float | None:
+    """Approximate geodesic acres without adding a heavyweight GIS dependency.
+
+    PLSS sections are small enough that a local equirectangular projection around
+    the polygon centroid is highly accurate for parser reconciliation.
+    """
+    if not geojson:
+        return None
+    try:
+        geom = shape(geojson)
+        if geom.is_empty:
+            return None
+        centroid = geom.centroid
+        lat0 = math.radians(float(centroid.y))
+        radius = 6371008.8
+        def project(x, y, z=None):
+            xm = radius * math.radians(x - centroid.x) * math.cos(lat0)
+            ym = radius * math.radians(y - centroid.y)
+            return (xm, ym)
+        local = transform(project, geom)
+        return abs(float(local.area)) / 4046.8564224
+    except Exception:
+        return None
+
+
+def _pdf_field_label_anchors(page, entries: list[_FieldEntry], image: Image.Image, scale: float = 0.5) -> dict[tuple[str, str, str], tuple[float, float]]:
+    """Best-effort PDF text-coordinate anchors for physical field labels.
+
+    This never forces a match. An anchor is only used later when it actually
+    lands inside a detected crop component, so PDFs whose embedded raster does
+    not align with page coordinates safely fall back to multi-signal matching.
+    """
+    wanted = {(e.farm, e.tract, e.field) for e in entries}
+    found: dict[tuple[str, str, str], tuple[float, float]] = {}
+    try:
+        pw = float(page.mediabox.width)
+        ph = float(page.mediabox.height)
+        fragments: list[tuple[str, float, float]] = []
+        def visitor(text, cm, tm, font_dict, font_size):
+            value = re.sub(r"\s+", " ", str(text or "")).strip()
+            if not value:
+                return
+            try:
+                x = float(tm[4])
+                y = float(tm[5])
+            except Exception:
+                return
+            fragments.append((value, x, y))
+        page.extract_text(visitor_text=visitor)
+        patterns = [
+            re.compile(r"F(?P<farm>\d+)-T(?P<tract>\d+)-(?P<field>\d+)", re.I),
+            re.compile(r"F(?P<farm>\d+)\s+T(?P<tract>\d+)\s+(?:FIELD\s*)?(?P<field>\d+)", re.I),
+        ]
+        for text_value, x, y in fragments:
+            for pattern in patterns:
+                m = pattern.search(text_value)
+                if not m:
+                    continue
+                key = (m.group("farm"), m.group("tract"), m.group("field"))
+                if key not in wanted or key in found:
+                    continue
+                px = (x / max(pw, 1.0)) * image.width * scale
+                py = (1.0 - (y / max(ph, 1.0))) * image.height * scale
+                found[key] = (px, py)
+                break
+    except Exception:
+        return {}
+    return found
+
+
+def _component_contains(comp: _RasterComponent, point: tuple[float, float], padding: int = 2) -> bool:
+    x, y = point
+    yi = int(round(y))
+    xi = int(round(x))
+    for ry, x1, x2 in comp.runs:
+        if abs(ry - yi) <= padding and (x1 - padding) <= xi <= (x2 + padding):
+            return True
+    return False
+
+
+def _component_centroid(comp: _RasterComponent) -> tuple[float, float]:
+    if comp.centroid_x or comp.centroid_y:
+        return comp.centroid_x, comp.centroid_y
+    total = 0
+    sx = 0.0
+    sy = 0.0
+    for y, x1, x2 in comp.runs:
+        n = x2 - x1 + 1
+        total += n
+        sx += ((x1 + x2) / 2.0) * n
+        sy += y * n
+    if total:
+        comp.centroid_x = sx / total
+        comp.centroid_y = sy / total
+    return comp.centroid_x, comp.centroid_y
+
+
+def _adaptive_hue_window(hue: np.ndarray, sat: np.ndarray, val: np.ndarray, base_low: int, base_high: int) -> tuple[int, int]:
+    """Adapt NAU overlay color thresholds to PDF/export color drift."""
+    broad_low = max(0, base_low - 12)
+    broad_high = min(255, base_high + 12)
+    candidate = (hue >= broad_low) & (hue <= broad_high) & (sat >= 45) & (val >= 60)
+    values = hue[candidate]
+    if values.size < 80:
+        return base_low, base_high
+    center = float(np.median(values))
+    spread = max(5.0, min(13.0, float(np.percentile(np.abs(values - center), 85)) + 3.0))
+    return max(0, int(round(center - spread))), min(255, int(round(center + spread)))
+
+
 def _overlay_mask(image: Image.Image, crop: str, frame: tuple[int, int, int, int], scale: float = 0.5):
     small = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.Resampling.BILINEAR)
     hsv = np.asarray(small.convert("HSV"), dtype=np.uint8)
     hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    if crop == "SOYBEANS":
-        mask = (hue >= 120) & (hue <= 160) & (sat >= 55) & (val >= 70)
-    else:
-        mask = (hue >= 43) & (hue <= 62) & (sat >= 120) & (val >= 110)
     left, top, right, bottom = [round(v * scale) for v in frame]
+    frame_hue = hue[max(0, top):min(hue.shape[0], bottom + 1), max(0, left):min(hue.shape[1], right + 1)]
+    frame_sat = sat[max(0, top):min(sat.shape[0], bottom + 1), max(0, left):min(sat.shape[1], right + 1)]
+    frame_val = val[max(0, top):min(val.shape[0], bottom + 1), max(0, left):min(val.shape[1], right + 1)]
+    if crop == "SOYBEANS":
+        hlo, hhi = _adaptive_hue_window(frame_hue, frame_sat, frame_val, 120, 160)
+        mask = (hue >= hlo) & (hue <= hhi) & (sat >= 48) & (val >= 65)
+    else:
+        hlo, hhi = _adaptive_hue_window(frame_hue, frame_sat, frame_val, 43, 62)
+        mask = (hue >= hlo) & (hue <= hhi) & (sat >= 95) & (val >= 90)
     clipped = np.zeros(mask.shape, dtype=bool)
     clipped[max(0, top):min(mask.shape[0], bottom + 1), max(0, left):min(mask.shape[1], right + 1)] = mask[max(0, top):min(mask.shape[0], bottom + 1), max(0, left):min(mask.shape[1], right + 1)]
     return clipped, (left, top, right, bottom), scale
-
 
 def _find(parent: list[int], value: int) -> int:
     while parent[value] != value:
@@ -332,20 +449,59 @@ def _components(mask: np.ndarray, min_pixels: int = 12) -> list[_RasterComponent
     return sorted(result, key=lambda c: c.area, reverse=True)
 
 
-def _match_components(entries: list[_FieldEntry], components: list[_RasterComponent], frame_area: float):
+def _match_components(
+    entries: list[_FieldEntry],
+    components: list[_RasterComponent],
+    frame_area: float,
+    section_acres: float,
+    label_anchors: dict[tuple[str, str, str], tuple[float, float]] | None = None,
+):
+    """Match physical fields to map polygons using spatial anchors first, acreage second."""
     if not entries or not components:
         return []
+    label_anchors = label_anchors or {}
+    section_acres = max(float(section_acres or 640.0), 1.0)
     for comp in components:
-        comp.estimated_acres = 640.0 * comp.area / max(frame_area, 1.0)
-    fields = sorted(entries, key=lambda e: e.acres, reverse=True)
-    comps = sorted(
-        [c for c in components if c.estimated_acres >= max(0.04, min(e.acres for e in fields) * 0.15)],
-        key=lambda c: c.estimated_acres,
-        reverse=True,
-    )
+        comp.estimated_acres = section_acres * comp.area / max(frame_area, 1.0)
+        _component_centroid(comp)
+
+    fields = list(entries)
+    comps = [c for c in components if c.estimated_acres >= max(0.03, min(max(e.acres, 0.01) for e in fields) * 0.10)]
     if len(comps) < len(fields):
-        comps = sorted(components, key=lambda c: c.estimated_acres, reverse=True)
-    n, m = len(fields), len(comps)
+        comps = list(components)
+
+    pairs: list[tuple[_FieldEntry, _RasterComponent, float, float, str]] = []
+    used_components: set[int] = set()
+    used_fields: set[tuple[str, str, str]] = set()
+
+    # Spatial label anchors are the strongest evidence available from the source PDF.
+    for field in fields:
+        key = (field.farm, field.tract, field.field)
+        anchor = label_anchors.get(key)
+        if not anchor:
+            continue
+        containing = [(idx, comp) for idx, comp in enumerate(comps) if idx not in used_components and _component_contains(comp, anchor)]
+        if len(containing) != 1:
+            continue
+        idx, comp = containing[0]
+        ratio = comp.estimated_acres / max(field.acres, 0.01)
+        if not 0.20 <= ratio <= 2.50:
+            continue
+        acre_error = abs(math.log(max(ratio, 1e-6)))
+        confidence = 0.995 if acre_error <= 0.10 else 0.985 if acre_error <= 0.20 else 0.965 if acre_error <= 0.35 else 0.925
+        pairs.append((field, comp, confidence, ratio, "pdf_label_inside_polygon"))
+        used_components.add(idx)
+        used_fields.add(key)
+
+    remaining_fields = [e for e in fields if (e.farm, e.tract, e.field) not in used_fields]
+    available = [(idx, c) for idx, c in enumerate(comps) if idx not in used_components]
+    if not remaining_fields or not available:
+        return pairs
+
+    # Conservative acreage assignment for fields lacking a usable label anchor.
+    remaining_fields = sorted(remaining_fields, key=lambda e: e.acres, reverse=True)
+    available_sorted = sorted(available, key=lambda item: item[1].estimated_acres, reverse=True)
+    n, m = len(remaining_fields), len(available_sorted)
     inf = 1e18
     dp = [[inf] * (m + 1) for _ in range(n + 1)]
     take = [[False] * (m + 1) for _ in range(n + 1)]
@@ -354,29 +510,32 @@ def _match_components(entries: list[_FieldEntry], components: list[_RasterCompon
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             dp[i][j] = dp[i][j - 1]
-            expected = max(fields[i - 1].acres, 0.01)
-            observed = max(comps[j - 1].estimated_acres, 0.01)
+            expected = max(remaining_fields[i - 1].acres, 0.01)
+            observed = max(available_sorted[j - 1][1].estimated_acres, 0.01)
             cost = abs(math.log(observed / expected))
             if dp[i - 1][j - 1] + cost < dp[i][j]:
                 dp[i][j] = dp[i - 1][j - 1] + cost
                 take[i][j] = True
     if dp[n][m] >= inf / 2:
-        return []
-    pairs = []
+        return pairs
+
+    fallback: list[tuple[_FieldEntry, _RasterComponent, float, float, str]] = []
     i, j = n, m
     while i and j:
         if take[i][j]:
-            field, comp = fields[i - 1], comps[j - 1]
+            field = remaining_fields[i - 1]
+            comp = available_sorted[j - 1][1]
             ratio = comp.estimated_acres / max(field.acres, 0.01)
             error = abs(math.log(max(ratio, 1e-6)))
-            confidence = 0.93 if error <= 0.18 else 0.86 if error <= 0.35 else 0.72 if error <= 0.60 else 0.55
-            pairs.append((field, comp, confidence, ratio))
+            # Acreage-only matches are intentionally capped below auto-confirm confidence.
+            confidence = 0.94 if error <= 0.08 else 0.90 if error <= 0.16 else 0.82 if error <= 0.30 else 0.70 if error <= 0.50 else 0.50
+            fallback.append((field, comp, confidence, ratio, "acreage_reconciliation"))
             i -= 1
             j -= 1
         else:
             j -= 1
-    return list(reversed(pairs))
-
+    pairs.extend(reversed(fallback))
+    return pairs
 
 def _component_geometry(comp: _RasterComponent, frame_small: tuple[int, int, int, int], section_geojson: dict[str, Any]) -> dict[str, Any] | None:
     left, top, right, bottom = frame_small

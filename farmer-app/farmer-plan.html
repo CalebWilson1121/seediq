@@ -4,13 +4,13 @@
 :root{--bg:#f4f7f2;--panel:#fff;--ink:#162319;--muted:#6b776d;--line:#dfe7df;--green:#1f6f43;--dark:#102a1d;--lime:#dff2e5;--warn:#fff2d9;--blue:#e8f0fb}*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{background:var(--dark);color:#fff;padding:22px 18px}.brand{font-size:25px;font-weight:850}.brand span{color:#8fd39f}.subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}nav{display:grid;gap:7px;margin-top:28px}nav a{color:#dce8df;text-decoration:none;padding:11px 12px;border-radius:10px;font-size:14px}nav a:hover,nav a.active{background:#1d4b33}.main{padding:28px 32px 48px}.hero{background:linear-gradient(135deg,#123822,#1f6f43);color:#fff;border-radius:18px;padding:22px}.hero p{color:#c9ddcf;margin-bottom:0}.grid{display:grid;gap:16px}.kpis{grid-template-columns:repeat(4,1fr);margin:16px 0}.cols{grid-template-columns:1.35fr .65fr}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}.metric{font-size:28px;font-weight:850}.muted{color:var(--muted)}.btn{border:0;background:var(--green);color:#fff;border-radius:9px;padding:9px 12px;font-weight:750;cursor:pointer}.btn.secondary{background:#eaf2ed;color:#17452d}.btn.auto{background:#173c29}.btn:disabled{opacity:.5;cursor:wait}.input,.select{padding:8px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:12px}.table th{font-size:10px;text-transform:uppercase;color:var(--muted);letter-spacing:.05em}.tag{display:inline-block;padding:4px 7px;border-radius:999px;background:var(--lime);font-size:10px;font-weight:750}.tag.irr{background:#e8f0fb;color:#2d5e8c}.tag.nirr{background:#fff0d3;color:#835f18}.rec{border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0;background:#fff}.rec.top{border:2px solid var(--green);background:#fbfefc}.rec-head{display:flex;justify-content:space-between;gap:8px}.score{font-weight:850;color:var(--green)}.small{font-size:11px}.economics{background:#f7faf8;border:1px solid var(--line);border-radius:11px;padding:10px;margin-top:8px}.field-editor{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.field-editor label{font-size:10px;color:var(--muted);font-weight:750}.field-editor input,.field-editor select{width:100%;margin-top:4px}.full{grid-column:1/-1}.callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0}.warning{border-left-color:#c28a21;background:var(--warn)}.order{border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0}.toolbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.loading{padding:25px;text-align:center;color:var(--muted)}.auto-result{margin-bottom:16px}.auto-result b{color:var(--green)}@media(max-width:1000px){.app{grid-template-columns:1fr}.kpis,.cols{grid-template-columns:1fr}.main{padding:18px}.sidebar{height:auto}.field-editor{grid-template-columns:1fr}}
 </style><link rel="icon" href="/acrefit-icon.svg"></head>
 <body><div class="app"><aside class="sidebar"><div class="brand"><img src="/acrefit-farmer-logo-light.svg" alt="AcreFit Farmer" style="height:42px;width:auto;max-width:205px;display:block"></div><div class="subbrand">Your farm. Your fields. Your seed plan.</div><nav>
-<a href="/farmer-dashboard.html">Farm Overview</a>
-<a href="/farmer-fields.html">Fields & Mapping</a>
-<a href="/farmer-/farmer-field-analysis.html">Field Analysis</a>
-<a class="active" href="/farmer-plan.html">Annual Crop Plan</a>
-<a href="/farmer-history.html">Planting & Performance</a>
-<a href="/farmer-/farmer-genetics.html">Seed Genetics</a>
-<a href="/farmer-data.html">Farm Data Hub</a>
+<a id="ffOverview" href="/farmer-dashboard.html">Farm Overview</a>
+<a id="ffFields" href="/farmer-fields.html">Fields & Mapping</a>
+<a id="ffAnalysis" href="/farmer-field-analysis.html">Field Analysis</a>
+<a id="ffPlan" class="active" href="/farmer-plan.html">Annual Crop Plan</a>
+<a id="ffHistory" href="/farmer-history.html">Planting & Performance</a>
+<a id="ffGenetics" href="/farmer-genetics.html">Seed Genetics</a>
+<a id="ffData" href="/farmer-data.html">Farm Data Hub</a>
 </nav><div class="side-card"><b>Farmer workflow</b><br><br>1. Map fields<br>2. Update APH<br>3. Set crop rotation<br>4. Review field fit<br>5. Choose genetics<br>6. Track results</div></aside><main class="main"><div id="content" class="loading">Loading live seed plan…</div></main></div>
 <script>
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -34,4 +34,26 @@ async function chooseSeed(seedProductId,pop){document.getElementById('pop').valu
 async function requestPriceOverride(){const price=val('overridePrice'),note=document.getElementById('overrideNote')?.value||'';if(price==null)return alert('Enter the price you want to request.');try{const r=await api('/api/fields/'+selectedField.field_id+'/price-override',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:year,requested_price:price,request_note:note})});alert('Price request sent to Dealer Admin for approval.');await openField(selectedField.field_id)}catch(e){alert(e.message)}}
 function val(id){const v=document.getElementById(id)?.value;return v===''||v==null?null:Number(v)}function intval(id){const v=val(id);return v==null?null:Math.round(v)}
 boot().catch(e=>document.getElementById('content').innerHTML='<div class="card"><b>Could not load seed plan.</b><br>'+esc(e.message)+'</div>');
-</script><script src="/activity.js"></script></body></html>
+</script><script src="/activity.js"></script><script>
+(function(){
+  async function wireFarmerNav(){
+    const q=new URLSearchParams(location.search);
+    let pid=Number(q.get('id'))||null, yr=Number(q.get('year'))||2027;
+    try{
+      if(!pid){
+        const r=await fetch('/api/farmer/dashboard?crop_year='+yr);
+        if(r.ok){const d=await r.json();pid=Number((d.farms||[])[0]?.prospect_id)||null;}
+      }
+    }catch{}
+    const set=(id,url)=>{const el=document.getElementById(id);if(el)el.href=url};
+    set('ffOverview','/farmer-dashboard.html');
+    set('ffFields',pid?'/farmer-fields.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffAnalysis',pid?'/farmer-field-analysis.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffPlan',pid?'/farmer-plan.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffHistory','/farmer-history.html');
+    set('ffGenetics',pid?'/farmer-genetics.html?id='+pid+'&year='+yr:'/farmer-genetics.html');
+    set('ffData','/farmer-data.html');
+  }
+  wireFarmerNav();
+})();
+</script></body></html>

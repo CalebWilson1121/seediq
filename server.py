@@ -137,7 +137,7 @@ def _database_status() -> str:
 def _user(request: Request):
     if os.getenv("ACREFIT_DEMO_MODE") == "1":
         demo_role = request.cookies.get("acrefit_demo_role")
-        demo_ids = {"super_admin": 1, "dealer_admin": 2, "salesperson": 3}
+        demo_ids = {"super_admin": 1, "dealer_admin": 2, "salesperson": 3, "farmer": 5}
         demo_user_id = demo_ids.get(demo_role or "")
         if demo_user_id:
             with connect() as conn:
@@ -165,6 +165,8 @@ def _role(user: dict) -> str:
         return "super_admin"
     if user.get("global_role") == "dealer_admin":
         return "dealer_admin"
+    if user.get("global_role") in {"farmer_admin", "farmer_user"}:
+        return user.get("global_role")
     return "salesperson"
 
 
@@ -240,6 +242,13 @@ def _prospect_scope(user: dict, scope: str | None = None, requested_organization
         if requested_organization_id is not None:
             return " WHERE p.organization_id=?", (int(requested_organization_id),)
         return "", ()
+    if role in {"farmer_admin", "farmer_user"}:
+        return (
+            " WHERE p.farm_id IN (SELECT fof.farm_id FROM farmer_organization_farms fof "
+            "JOIN farmer_organization_users fou ON fou.farmer_organization_id=fof.farmer_organization_id "
+            "WHERE fou.user_id=?)",
+            (int(user["id"]),),
+        )
     if user.get("organization_id") is None:
         raise HTTPException(status_code=403, detail="No dealership is assigned to this account")
     organization_id = int(user["organization_id"])
@@ -260,6 +269,16 @@ def _require_prospect_access(conn, prospect_id: int, user: dict):
     role = _role(user)
     if role == "super_admin":
         return row
+    if role in {"farmer_admin", "farmer_user"}:
+        access = conn.execute(
+            "SELECT 1 FROM prospects p JOIN farmer_organization_farms fof ON fof.farm_id=p.farm_id "
+            "JOIN farmer_organization_users fou ON fou.farmer_organization_id=fof.farmer_organization_id "
+            "WHERE p.id=? AND fou.user_id=?",
+            (prospect_id, int(user["id"])),
+        ).fetchone()
+        if not access:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+        return row
     if int(row["organization_id"] or 0) != int(user.get("organization_id") or 0):
         raise HTTPException(status_code=404, detail="Prospect not found")
     if role == "salesperson" and int(row["assigned_salesperson_id"] or 0) != int(user["id"]):
@@ -275,6 +294,16 @@ def _require_farm_access(conn, farm_id: int, user: dict):
         raise HTTPException(status_code=404, detail="Farm not found")
     role = _role(user)
     if role == "super_admin":
+        return row
+    if role in {"farmer_admin", "farmer_user"}:
+        access = conn.execute(
+            "SELECT 1 FROM farmer_organization_farms fof "
+            "JOIN farmer_organization_users fou ON fou.farmer_organization_id=fof.farmer_organization_id "
+            "WHERE fof.farm_id=? AND fou.user_id=?",
+            (farm_id, int(user["id"])),
+        ).fetchone()
+        if not access:
+            raise HTTPException(status_code=404, detail="Farm not found")
         return row
     if int(row["organization_id"] or 0) != int(user.get("organization_id") or 0):
         raise HTTPException(status_code=404, detail="Farm not found")
@@ -293,6 +322,16 @@ def _require_field_access(conn, field_id: int, user: dict):
         raise HTTPException(status_code=404, detail="Field not found")
     role = _role(user)
     if role == "super_admin":
+        return row
+    if role in {"farmer_admin", "farmer_user"}:
+        access = conn.execute(
+            "SELECT 1 FROM farmer_organization_farms fof "
+            "JOIN farmer_organization_users fou ON fou.farmer_organization_id=fof.farmer_organization_id "
+            "WHERE fof.farm_id=? AND fou.user_id=?",
+            (int(row["farm_id"]), int(user["id"])),
+        ).fetchone()
+        if not access:
+            raise HTTPException(status_code=404, detail="Field not found")
         return row
     if int(row["organization_id"] or 0) != int(user.get("organization_id") or 0):
         raise HTTPException(status_code=404, detail="Field not found")
@@ -346,10 +385,12 @@ def _enforce_record_path_access(path: str, user: dict) -> None:
 # remain intentionally public.
 _PUBLIC_EXACT_PATHS = {
     "/login.html",
+    "/farmer-login.html",
     "/api/auth/login",
     "/api/auth/demo-role/super_admin",
     "/api/auth/demo-role/dealer_admin",
     "/api/auth/demo-role/salesperson",
+    "/api/auth/demo-role/farmer",
     "/api/auth/logout",
     "/api/health",
     "/farmer-proposal",
@@ -360,6 +401,8 @@ _PUBLIC_EXACT_PATHS = {
     "/favicon.ico",
     "/acrefit-logo.svg",
     "/acrefit-logo-light.svg",
+    "/acrefit-farmer-logo.svg",
+    "/acrefit-farmer-logo-light.svg",
     "/acrefit-icon.svg",
 }
 _PUBLIC_PREFIXES = (
@@ -385,7 +428,7 @@ async def require_app_session(request: Request, call_next):
     if path.startswith("/api/"):
         return JSONResponse(status_code=401, content={"detail": "Login required"})
 
-    target = "/login.html"
+    target = "/farmer-login.html" if os.getenv("ACREFIT_PRODUCT") == "farmer" else "/login.html"
     if request.url.query:
         # Keep redirects simple and non-sensitive; the login page can return the
         # user to the app home after authentication.
@@ -429,6 +472,7 @@ def auth_demo_role(role: str):
         "super_admin": "/admin.html",
         "dealer_admin": "/dealer-demo.html",
         "salesperson": "/pipeline.html",
+        "farmer": "/farmer-dashboard.html",
     }
     destination = destinations.get(role)
     if not destination:
@@ -450,6 +494,68 @@ def auth_me(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Login required")
     return user
+
+@app.get("/api/farmer/dashboard")
+def farmer_dashboard(request: Request, crop_year: int = 2027):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    if _role(user) not in {"farmer_admin", "farmer_user", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Farmer access required")
+    with connect() as conn:
+        if _role(user) == "super_admin":
+            farms = rows_to_dicts(conn.execute(
+                "SELECT f.id,f.farm_name,f.producer_name,f.state,f.county,p.id AS prospect_id,p.total_acres "
+                "FROM farms f LEFT JOIN prospects p ON p.farm_id=f.id ORDER BY f.farm_name"
+            ).fetchall())
+            org_name = "All Farms"
+        else:
+            org = conn.execute(
+                "SELECT fo.id,fo.name FROM farmer_organizations fo "
+                "JOIN farmer_organization_users fou ON fou.farmer_organization_id=fo.id "
+                "WHERE fou.user_id=? ORDER BY fo.id LIMIT 1",
+                (int(user["id"]),),
+            ).fetchone()
+            org_name = org.get("name") if org else "Farm Organization"
+            farms = rows_to_dicts(conn.execute(
+                "SELECT f.id,f.farm_name,f.producer_name,f.state,f.county,p.id AS prospect_id,p.total_acres "
+                "FROM farmer_organization_farms fof "
+                "JOIN farmer_organization_users fou ON fou.farmer_organization_id=fof.farmer_organization_id "
+                "JOIN farms f ON f.id=fof.farm_id LEFT JOIN prospects p ON p.farm_id=f.id "
+                "WHERE fou.user_id=? ORDER BY f.farm_name",
+                (int(user["id"]),),
+            ).fetchall())
+        farm_ids = [int(x["id"]) for x in farms]
+        summary = {"farms": len(farm_ids), "acres": 0.0, "fields": 0, "mapped": 0, "aph_fields": 0, "planned": 0, "seed_selected": 0}
+        if farm_ids:
+            placeholders = ",".join("?" for _ in farm_ids)
+            row = conn.execute(
+                f"SELECT COALESCE(SUM(f.acres),0) AS acres,COUNT(*) AS fields,"
+                f"COUNT(*) FILTER (WHERE fl.boundary_geojson IS NOT NULL) AS mapped "
+                f"FROM fields f LEFT JOIN LATERAL (SELECT boundary_geojson FROM field_locations x WHERE x.field_id=f.id AND x.boundary_geojson IS NOT NULL ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true "
+                f"WHERE f.farm_id IN ({placeholders})",
+                tuple(farm_ids),
+            ).fetchone()
+            summary["acres"] = round(float(row.get("acres") or 0),1)
+            summary["fields"] = int(row.get("fields") or 0)
+            summary["mapped"] = int(row.get("mapped") or 0)
+            plan = conn.execute(
+                f"SELECT COUNT(*) FILTER (WHERE cp.crop IS NOT NULL) AS planned,"
+                f"COUNT(*) FILTER (WHERE cp.selected_seed_product_id IS NOT NULL) AS seed_selected "
+                f"FROM fields f LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? "
+                f"WHERE f.farm_id IN ({placeholders})",
+                (crop_year,*farm_ids),
+            ).fetchone()
+            summary["planned"] = int(plan.get("planned") or 0)
+            summary["seed_selected"] = int(plan.get("seed_selected") or 0)
+            aph = conn.execute(
+                f"SELECT COUNT(DISTINCT pr.field_id) AS aph_fields FROM production_records pr "
+                f"JOIN fields f ON f.id=pr.field_id WHERE f.farm_id IN ({placeholders})",
+                tuple(farm_ids),
+            ).fetchone()
+            summary["aph_fields"] = int(aph.get("aph_fields") or 0)
+    return {"organization_name": org_name, "crop_year": crop_year, "summary": summary, "farms": farms}
+
 
 @app.get("/api/admin/overview")
 def get_admin_overview(request: Request):
@@ -1095,15 +1201,16 @@ def seed_rank(req: SeedRankRequest):
     return {"ranked": rank_seeds(req.field_profile, req.seeds), "engine_version": "seed-fit-v0.1"}
 
 @app.api_route("/", methods=["GET", "HEAD"])
-def root(): return FileResponse(BASE / "index.html")
+def root():
+    return FileResponse(BASE / ("farmer-dashboard.html" if os.getenv("ACREFIT_PRODUCT") == "farmer" else "index.html"))
 
 @app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):
-    allowed = {"index", "login", "admin", "dealer-demo", "salesperson-profile", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "pricing", "product-spec", "data-hub"}
+    allowed = {"index", "login", "farmer-login", "farmer-dashboard", "admin", "dealer-demo", "salesperson-profile", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "pricing", "product-spec", "data-hub"}
     if page_name not in allowed: raise HTTPException(status_code=404)
     return FileResponse(BASE / f"{page_name}.html")
 
 @app.api_route("/{asset_name}", methods=["GET", "HEAD"])
 def static_asset(asset_name: str):
-    if asset_name not in {"styles.css", "app.js", "activity.js", "acrefit-logo.svg", "acrefit-logo-light.svg", "acrefit-icon.svg"}: raise HTTPException(status_code=404)
+    if asset_name not in {"styles.css", "app.js", "activity.js", "acrefit-logo.svg", "acrefit-logo-light.svg", "acrefit-farmer-logo.svg", "acrefit-farmer-logo-light.svg", "acrefit-icon.svg"}: raise HTTPException(status_code=404)
     return FileResponse(BASE / asset_name)

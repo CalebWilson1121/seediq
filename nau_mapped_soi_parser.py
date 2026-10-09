@@ -631,7 +631,9 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
             section_geojson = None
             out.warnings.append(f"Page {page_idx + 1}: PLSS section {section}-{township_range} could not be georeferenced: {exc}")
         frame = _section_frame(image)
-        page_matches: dict[tuple[str, str, str], tuple[_RasterComponent, float, float, tuple[int, int, int, int]]] = {}
+        section_acres = _geometry_acres(section_geojson) if section_geojson else None
+        label_anchors = _pdf_field_label_anchors(reader.pages[page_idx], entries, image, scale=0.5)
+        page_matches: dict[tuple[str, str, str], tuple[_RasterComponent, float, float, tuple[int, int, int, int], str]] = {}
         if section_geojson:
             for crop in ("CORN", "SOYBEANS"):
                 crop_entries = [e for e in entries if e.crop == crop]
@@ -640,8 +642,19 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 mask, frame_small, _ = _overlay_mask(image, crop, frame)
                 comps = _components(mask)
                 frame_area = max((frame_small[2] - frame_small[0]) * (frame_small[3] - frame_small[1]), 1)
-                for entry, comp, confidence, ratio in _match_components(crop_entries, comps, frame_area):
-                    page_matches[(entry.farm, entry.tract, entry.field)] = (comp, confidence, ratio, frame_small)
+                crop_anchors = {
+                    (e.farm, e.tract, e.field): label_anchors[(e.farm, e.tract, e.field)]
+                    for e in crop_entries
+                    if (e.farm, e.tract, e.field) in label_anchors
+                }
+                for entry, comp, confidence, ratio, method in _match_components(
+                    crop_entries,
+                    comps,
+                    frame_area,
+                    section_acres or 640.0,
+                    crop_anchors,
+                ):
+                    page_matches[(entry.farm, entry.tract, entry.field)] = (comp, confidence, ratio, frame_small, method)
         common_counts: dict[str, int] = {}
         for entry in entries:
             if entry.common_name:
@@ -669,16 +682,31 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
             }
             match = page_matches.get(key)
             if match and section_geojson:
-                comp, confidence, ratio, frame_small = match
+                comp, confidence, ratio, frame_small, match_method = match
                 boundary = _component_geometry(comp, frame_small, section_geojson)
                 if boundary and 0.25 <= ratio <= 1.80:
+                    boundary_acres = _geometry_acres(boundary)
+                    acre_delta = (boundary_acres - entry.acres) if boundary_acres is not None else None
+                    acre_delta_pct = (abs(acre_delta) / entry.acres * 100.0) if acre_delta is not None and entry.acres else None
+                    validation_status = "pass" if (
+                        confidence >= 0.96
+                        and acre_delta_pct is not None
+                        and acre_delta_pct <= 12.0
+                    ) else "review"
                     metadata.update({
                         "reference_boundary_geojson": boundary,
                         "geometry_status": "mapped_soi_reference",
                         "geometry_authoritative": False,
                         "geometry_confidence": round(confidence, 3),
                         "geometry_acre_ratio": round(ratio, 3),
-                        "reference_boundary_source": "NAU Mapped SOI raster + Kansas PLSS",
+                        "geometry_match_method": match_method,
+                        "geometry_validation_status": validation_status,
+                        "source_section_acres": round(section_acres, 2) if section_acres is not None else None,
+                        "reference_boundary_acres": round(boundary_acres, 2) if boundary_acres is not None else None,
+                        "reference_acre_delta": round(acre_delta, 2) if acre_delta is not None else None,
+                        "reference_acre_delta_pct": round(acre_delta_pct, 2) if acre_delta_pct is not None else None,
+                        "pdf_label_anchor_used": match_method == "pdf_label_inside_polygon",
+                        "reference_boundary_source": "NAU Mapped SOI raster + Kansas PLSS v0.4",
                     })
                     geometry_matches += 1
             existing = parsed_fields.get(key)
@@ -708,15 +736,22 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
                 ("insurance_unit_number", metadata.get("insurance_unit_number")),
                 ("source_crop", metadata.get("source_crop")),
                 ("source_practice", metadata.get("source_practice")),
+                ("geometry_match_method", metadata.get("geometry_match_method")),
+                ("geometry_confidence", metadata.get("geometry_confidence")),
+                ("reference_boundary_acres", metadata.get("reference_boundary_acres")),
+                ("reference_acre_delta_pct", metadata.get("reference_acre_delta_pct")),
+                ("geometry_validation_status", metadata.get("geometry_validation_status")),
             ):
                 out.facts.append(SourceFact("mapped_soi_field", entity_key, field_name, value, source_locator=f"page:{entry.page}", confidence=1.0))
     out.fields = list(parsed_fields.values())
     if not out.fields:
         out.warnings.append("Mapped SOI parser did not produce physical fields.")
     elif geometry_matches < len(out.fields):
-        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities; {geometry_matches} received raster-georeferenced reference shapes. Reference shapes are locators only and are not promoted to authoritative AcreFit boundaries.")
+        high_conf = sum(1 for f in out.fields if (f.metadata or {}).get("geometry_validation_status") == "pass")
+        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities; {geometry_matches} received raster-georeferenced reference shapes and {high_conf} passed high-confidence geometry QA. Exceptions should be reviewed rather than auto-confirmed.")
     else:
-        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes. AcreFit requires exact MBAR/GIS or confirmed manual geometry before soil and production recommendations use a boundary.")
+        high_conf = sum(1 for f in out.fields if (f.metadata or {}).get("geometry_validation_status") == "pass")
+        out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes; {high_conf}/{len(out.fields)} passed high-confidence geometry QA.")
     membership_fields = sum(1 for f in out.fields if (f.metadata or {}).get("insurance_unit_memberships"))
     out.warnings.append(f"Insurance financial/election data was intentionally excluded. Current unit membership was anchored from NAU Total Unit Summary for {membership_fields}/{len(out.fields)} physical fields and is retained only as an APH identity bridge.")
     return out

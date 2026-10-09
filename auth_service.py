@@ -33,6 +33,8 @@ def effective_role(user: dict[str, Any] | Any) -> str:
         return "super_admin"
     if global_role == "dealer_admin":
         return "dealer_admin"
+    if global_role in {"farmer_admin", "farmer_user"}:
+        return global_role
     return "salesperson"
 
 

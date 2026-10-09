@@ -5,9 +5,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from shapely.geometry import mapping, shape
+
 from models import ParsedDocument, ParsedField, SourceFact
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def _norm(value: Any) -> str:
@@ -42,9 +44,17 @@ def _geometry(value: Any) -> dict | None:
             return None
     if obj.get("type") == "Feature":
         obj = obj.get("geometry") or {}
-    if obj.get("type") in {"Polygon", "MultiPolygon"} and obj.get("coordinates"):
-        return obj
-    return None
+    if obj.get("type") not in {"Polygon", "MultiPolygon"} or not obj.get("coordinates"):
+        return None
+    try:
+        geom = shape(obj)
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+        if geom.is_empty or geom.geom_type not in {"Polygon", "MultiPolygon"} or not geom.is_valid:
+            return None
+        return mapping(geom)
+    except Exception:
+        return None
 
 
 def parse_mbar_rows(rows: list[dict[str, Any]]) -> ParsedDocument:
@@ -82,6 +92,11 @@ def parse_mbar_rows(rows: list[dict[str, Any]]) -> ParsedDocument:
             "centroid_lat": centroid_lat,
             "centroid_lon": centroid_lon,
             "geometry_status": "exact" if boundary else ("centroid" if centroid_lat is not None and centroid_lon is not None else "missing"),
+            "geometry_authoritative": bool(boundary),
+            "geometry_validation_status": "pass" if boundary else "review",
+            "geometry_confidence": 1.0 if boundary else (0.65 if centroid_lat is not None and centroid_lon is not None else 0.0),
+            "geometry_auto_confirm_ready": bool(boundary),
+            "reference_boundary_source": "MBAR/GIS vector geometry" if boundary else None,
         }
         out.fields.append(ParsedField(
             name=name or (f"Farm {farm} Tract {tract} Field {field}" if any((farm, tract, field)) else f"MBAR Field {idx-1}"),

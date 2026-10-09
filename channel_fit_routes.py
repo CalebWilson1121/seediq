@@ -6,7 +6,7 @@ import json
 from statistics import mean, median
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from aph_utils import collapse_production_records, match_identity, record_identity
@@ -908,7 +908,7 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
 
 
 @router.get("/api/fields/{field_id}/channel-fit")
-def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5, rm_min: float | None = None, rm_max: float | None = None):
+def channel_fit(field_id: int, request: Request, crop_year: int = 2027, limit: int = 5, rm_min: float | None = None, rm_max: float | None = None):
     with connect() as conn:
         row = conn.execute(
             "SELECT f.id,f.farm_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,f.metadata_json AS field_metadata_json,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window,cp.crop,cp.yield_goal,cp.target_population,cp.preferred_rm_min,cp.preferred_rm_max,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.id=?",
@@ -920,20 +920,39 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5, rm_min: fl
         if crop not in {"CORN", "SOYBEANS"}:
             raise HTTPException(status_code=400, detail="Assign Corn or Soybeans to this field first")
         org_id = row.get("organization_id")
-        products = rows_to_dicts(conn.execute(
-            "SELECT sp.*,dsp.list_price,dsp.base_price,dsp.dealer_cost,"
-            "COALESCE(fpp.volume_discount_pct,0) AS volume_discount_pct,"
-            "COALESCE(fpp.early_pay_discount_pct,0) AS early_pay_discount_pct,"
-            "COALESCE(fpp.loyalty_discount_per_unit,0) AS loyalty_discount_per_unit,"
-            "COALESCE(fpp.custom_discount_per_unit,0) AS custom_discount_per_unit,"
-            "fpp.pricing_tier "
-            "FROM seed_products sp "
-            "LEFT JOIN dealer_seed_prices dsp ON dsp.seed_product_id=sp.id AND dsp.organization_id=? AND dsp.crop_year=? AND dsp.status='active' "
-            "LEFT JOIN farmer_pricing_profiles fpp ON fpp.farm_id=? AND fpp.crop_year=? "
-            "WHERE sp.brand='Channel' AND sp.active=true AND sp.crop_year=? AND upper(sp.crop)=? "
-            "AND (sp.organization_id=? OR ? IS NULL) ORDER BY sp.relative_maturity,sp.product_name",
-            (org_id, crop_year, row.get("farm_id"), crop_year, crop_year, crop, org_id, org_id),
-        ).fetchall())
+        farmer_mode = False
+        try:
+            from server import _user, _role
+            current = _user(request)
+            farmer_mode = bool(current and _role(current) in {"farmer_admin", "farmer_user"})
+        except Exception:
+            farmer_mode = False
+        if farmer_mode:
+            products = rows_to_dicts(conn.execute(
+                "SELECT sp.*,NULL::numeric AS list_price,NULL::numeric AS base_price,NULL::numeric AS dealer_cost,"
+                "0::numeric AS volume_discount_pct,0::numeric AS early_pay_discount_pct,"
+                "0::numeric AS loyalty_discount_per_unit,0::numeric AS custom_discount_per_unit,"
+                "NULL::text AS pricing_tier "
+                "FROM seed_products sp "
+                "WHERE sp.active=true AND sp.crop_year=? AND upper(sp.crop)=? "
+                "ORDER BY sp.brand,sp.relative_maturity,sp.product_name",
+                (crop_year, crop),
+            ).fetchall())
+        else:
+            products = rows_to_dicts(conn.execute(
+                "SELECT sp.*,dsp.list_price,dsp.base_price,dsp.dealer_cost,"
+                "COALESCE(fpp.volume_discount_pct,0) AS volume_discount_pct,"
+                "COALESCE(fpp.early_pay_discount_pct,0) AS early_pay_discount_pct,"
+                "COALESCE(fpp.loyalty_discount_per_unit,0) AS loyalty_discount_per_unit,"
+                "COALESCE(fpp.custom_discount_per_unit,0) AS custom_discount_per_unit,"
+                "fpp.pricing_tier "
+                "FROM seed_products sp "
+                "LEFT JOIN dealer_seed_prices dsp ON dsp.seed_product_id=sp.id AND dsp.organization_id=? AND dsp.crop_year=? AND dsp.status='active' "
+                "LEFT JOIN farmer_pricing_profiles fpp ON fpp.farm_id=? AND fpp.crop_year=? "
+                "WHERE sp.brand='Channel' AND sp.active=true AND sp.crop_year=? AND upper(sp.crop)=? "
+                "AND (sp.organization_id=? OR ? IS NULL) ORDER BY sp.relative_maturity,sp.product_name",
+                (org_id, crop_year, row.get("farm_id"), crop_year, crop_year, crop, org_id, org_id),
+            ).fetchall())
     row_dict = dict(row)
     if rm_min is not None:
         row_dict["preferred_rm_min"] = float(rm_min)
@@ -967,7 +986,7 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5, rm_min: fl
             },
             "aph_production_context": production_context,
         },
-        "ranking_method": f"AcreFit hard location/maturity gate first, then blended field/product fit + neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}) + SSURGO + IRR/NIRR + product ratings + farm management + matched APH/weather history; deterministic, no AI/model cost",
+        "ranking_method": f"AcreFit hard location/maturity gate first, then blended field/product fit + neutral Extension agronomy rules ({AGRONOMY_ENGINE_VERSION}) + SSURGO + IRR/NIRR + product ratings + farm management + matched APH/weather history; " + ("multi-brand farmer catalog" if farmer_mode else "dealer catalog") + "; deterministic, no AI/model cost",
         "agronomy_engine": {"version": AGRONOMY_ENGINE_VERSION, "source_count": rules_catalog()["source_count"]},
         "population_note": "Population is a AcreFit planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
         "catalog_product_count": len(ranked),

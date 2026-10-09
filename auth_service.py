@@ -597,6 +597,45 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
             margin = float(member.get("gross_margin") or 0)
             member["gross_margin_pct"] = round(margin / revenue * 100.0, 1) if revenue > 0 else 0.0
 
+        seed_demand = rows_to_dicts(conn.execute(
+            "SELECT sp.id AS seed_product_id,sp.brand,sp.product_name,sp.trait_package,cp.crop,"
+            "COALESCE(SUM(cp.units_required),0) AS total_units,"
+            "COALESCE(SUM(CASE WHEN lower(p.status)='won' THEN cp.units_required ELSE 0 END),0) AS committed_units,"
+            "COALESCE(SUM(CASE WHEN lower(p.status) NOT IN ('won','lost') THEN cp.units_required ELSE 0 END),0) AS pipeline_units,"
+            "COALESCE(SUM(CASE WHEN lower(p.status)='lost' THEN cp.units_required ELSE 0 END),0) AS lost_units,"
+            "COUNT(DISTINCT CASE WHEN lower(p.status)<>'lost' THEN fa.id END) AS active_farms,"
+            "COUNT(DISTINCT CASE WHEN lower(p.status)<>'lost' THEN p.assigned_salesperson_id END) AS salespeople,"
+            "STRING_AGG(DISTINCT CASE WHEN lower(p.status)<>'lost' THEN u.display_name END, ', ' ORDER BY CASE WHEN lower(p.status)<>'lost' THEN u.display_name END) AS salesperson_names "
+            "FROM field_crop_plans cp "
+            "JOIN fields ff ON ff.id=cp.field_id "
+            "JOIN farms fa ON fa.id=ff.farm_id "
+            "JOIN prospects p ON p.farm_id=fa.id "
+            "JOIN seed_products sp ON sp.id=cp.selected_seed_product_id "
+            "LEFT JOIN platform_users u ON u.id=p.assigned_salesperson_id "
+            "WHERE fa.organization_id=? AND cp.crop_year=? AND cp.selected_seed_product_id IS NOT NULL "
+            "GROUP BY sp.id,sp.brand,sp.product_name,sp.trait_package,cp.crop "
+            "HAVING COALESCE(SUM(CASE WHEN lower(p.status)<>'lost' THEN cp.units_required ELSE 0 END),0)>0 "
+            "ORDER BY COALESCE(SUM(CASE WHEN lower(p.status)<>'lost' THEN cp.units_required ELSE 0 END),0) DESC,sp.product_name",
+            (organization_id, crop_year),
+        ).fetchall())
+
+        for demand in seed_demand:
+            committed = float(demand.get("committed_units") or 0)
+            pipeline_units = float(demand.get("pipeline_units") or 0)
+            active_units = committed + pipeline_units
+            demand["forecast_units"] = round(active_units, 3)
+            demand["committed_pct"] = round(committed / active_units * 100.0, 1) if active_units > 0 else 0.0
+
+        demand_summary = {
+            "forecast_units": round(sum(float(x.get("forecast_units") or 0) for x in seed_demand), 3),
+            "committed_units": round(sum(float(x.get("committed_units") or 0) for x in seed_demand), 3),
+            "pipeline_units": round(sum(float(x.get("pipeline_units") or 0) for x in seed_demand), 3),
+            "products": len(seed_demand),
+        }
+        demand_summary["committed_pct"] = round(
+            demand_summary["committed_units"] / demand_summary["forecast_units"] * 100.0, 1
+        ) if demand_summary["forecast_units"] > 0 else 0.0
+
         catalog = conn.execute(
             "SELECT id,crop_year,catalog_name,status,product_count FROM seed_catalogs "
             "WHERE organization_id=? ORDER BY crop_year DESC,created_at DESC LIMIT 1",
@@ -619,5 +658,7 @@ def dealer_demo_dashboard(organization_id: int, salesperson_user_id: int | None 
         "stats": stats,
         "prospects": prospects,
         "team": team,
+        "seed_demand": seed_demand,
+        "demand_summary": demand_summary,
         "latest_catalog": dict(catalog) if catalog else None,
     }

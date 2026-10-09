@@ -26,6 +26,15 @@ from soil_service import enrich_field, enrich_prospect, prospect_soil_status
 
 BASE = Path(__file__).parent
 SESSION_COOKIE = "seediq_session"
+
+
+def _is_farmer_product(request: Request | None = None) -> bool:
+    if os.getenv("ACREFIT_PRODUCT") == "farmer":
+        return True
+    if request is None:
+        return False
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    return host.startswith("acrefit-farmer.") or host.startswith("farmer.")
 app = FastAPI(title="AcreFit Seed Sales Platform", version="0.8.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -428,7 +437,7 @@ async def require_app_session(request: Request, call_next):
     if path.startswith("/api/"):
         return JSONResponse(status_code=401, content={"detail": "Login required"})
 
-    target = "/farmer-login.html" if os.getenv("ACREFIT_PRODUCT") == "farmer" else "/login.html"
+    target = "/farmer-login.html" if _is_farmer_product(request) else "/login.html"
     if request.url.query:
         # Keep redirects simple and non-sensitive; the login page can return the
         # user to the app home after authentication.
@@ -1201,8 +1210,8 @@ def seed_rank(req: SeedRankRequest):
     return {"ranked": rank_seeds(req.field_profile, req.seeds), "engine_version": "seed-fit-v0.1"}
 
 @app.api_route("/", methods=["GET", "HEAD"])
-def root():
-    return FileResponse(BASE / ("farmer-dashboard.html" if os.getenv("ACREFIT_PRODUCT") == "farmer" else "index.html"))
+def root(request: Request):
+    return FileResponse(BASE / ("farmer-dashboard.html" if _is_farmer_product(request) else "index.html"))
 
 @app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):

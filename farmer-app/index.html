@@ -1,1 +1,161 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=/farmer-dashboard.html"><title>AcreFit Farmer</title></head><body><a href="/farmer-dashboard.html">Open AcreFit Farmer</a></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AcreFit Farmer</title>
+<link rel="icon" href="/acrefit-icon.svg">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.7.1/dist/maplibre-gl.css">
+<style>
+:root{--bg:#f3f6f1;--panel:#fff;--ink:#142218;--muted:#68756b;--line:#dce5dd;--green:#1f6f43;--green2:#2d8757;--dark:#0d2b1d;--soft:#eaf3ed;--warn:#fff4dc;--danger:#fdebea}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink)}
+.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{background:var(--dark);color:#fff;padding:22px 16px;position:sticky;top:0;height:100vh;overflow:auto}.logo{height:44px;max-width:210px}.tagline{font-size:12px;color:#a9c1b1;margin:5px 5px 18px}.nav{display:grid;gap:6px}.nav a{color:#dce8df;text-decoration:none;padding:11px 12px;border-radius:10px;font-size:14px}.nav a.active,.nav a:hover{background:#1e593a;color:#fff}.side-step{margin-top:20px;background:#163d29;border:1px solid #2b6846;border-radius:14px;padding:13px;color:#cfe2d5;font-size:12px;line-height:1.45}.signout{width:100%;margin-top:18px;background:#e9f1eb;color:#17442c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer}
+.main{padding:26px 30px 50px;min-width:0}.top{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.eyebrow{font-size:11px;font-weight:850;letter-spacing:.06em;color:var(--muted)}h1{margin:4px 0;font-size:32px}h2{margin:0 0 8px}.muted{color:var(--muted)}.select,.input{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;font:inherit}.btn{border:0;border-radius:9px;padding:9px 12px;background:var(--green);color:#fff;font-weight:800;cursor:pointer;text-decoration:none;display:inline-block}.btn.secondary{background:var(--soft);color:#17442c}.btn.outline{background:#fff;color:var(--ink);border:1px solid var(--line)}.btn.small{padding:6px 9px;font-size:12px}.btn:disabled{opacity:.5;cursor:not-allowed}
+.grid{display:grid;gap:14px}.kpis{grid-template-columns:repeat(6,1fr);margin:17px 0}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:17px}.metric{font-size:27px;font-weight:900}.hero{background:linear-gradient(135deg,#123822,#1f6f43);color:white;border-radius:18px;padding:22px}.hero p{color:#d8e6dc;margin-bottom:0}.progress{height:8px;border-radius:999px;background:#e5ece6;overflow:hidden}.progress i{display:block;height:100%;background:var(--green)}.tag{display:inline-block;background:#e7f3eb;color:#175a35;padding:4px 7px;border-radius:999px;font-size:11px;font-weight:800}.tag.warn{background:var(--warn);color:#795514}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:12px;vertical-align:top}.table th{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}.callout{border-left:4px solid var(--green);background:#f4faf6;padding:12px 14px;border-radius:0 10px 10px 0}.callout.warn{border-left-color:#bc8527;background:var(--warn)}.row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}.two{grid-template-columns:minmax(0,1.35fr) minmax(310px,.65fr)}.three{grid-template-columns:repeat(3,1fr)}
+.field-list{display:grid;gap:8px;max-height:620px;overflow:auto}.field-item{border:1px solid var(--line);border-radius:11px;padding:10px;cursor:pointer;background:#fff}.field-item.active{border-color:var(--green);box-shadow:0 0 0 1px var(--green);background:#f8fcf9}.map{height:520px;border:1px solid #ccd9cf;border-radius:15px;overflow:hidden;background:#dde7df}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.upload{border:2px dashed #abc7b3;border-radius:14px;padding:18px;background:#f8fbf8}.rec{border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.rec.top{border:2px solid var(--green);background:#fbfefc}.score{font-size:25px;font-weight:900;color:var(--green)}.rm{display:grid;grid-template-columns:90px 1fr 52px;gap:10px;align-items:center;font-size:12px}.rm input{width:100%;accent-color:var(--green)}.view{display:none}.view.active{display:block}.empty{padding:30px;text-align:center;color:var(--muted)}
+@media(max-width:1150px){.kpis{grid-template-columns:repeat(3,1fr)}.two{grid-template-columns:1fr}}@media(max-width:820px){.shell{grid-template-columns:1fr}.side{position:relative;height:auto}.main{padding:18px}.kpis,.three{grid-template-columns:repeat(2,1fr)}}@media(max-width:560px){.kpis,.three{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="side">
+<img class="logo" src="/acrefit-farmer-logo-light.svg" alt="AcreFit Farmer">
+<div class="tagline">Your farm. Your fields. Your seed plan.</div>
+<nav class="nav">
+<a data-view="overview" href="#overview">Farm Overview</a>
+<a data-view="fields" href="#fields">Fields & Mapping</a>
+<a data-view="analysis" href="#analysis">Field Analysis</a>
+<a data-view="plan" href="#plan">Annual Crop Plan</a>
+<a data-view="history" href="#history">Planting & Performance</a>
+<a data-view="genetics" href="#genetics">Seed Genetics</a>
+<a data-view="data" href="#data">Farm Data Hub</a>
+</nav>
+<div class="side-step"><b>Simple yearly workflow</b><br><br>1. Keep fields mapped<br>2. Update APH<br>3. Set crop rotation<br>4. Review field fit<br>5. Choose genetics<br>6. Track results</div>
+<button class="signout" onclick="logout()">Sign Out</button>
+</aside>
+<main class="main">
+<div class="top">
+<div><div class="eyebrow">ACREFIT FARMER</div><div id="farmTitle" style="font-size:20px;font-weight:900">Loading farm…</div></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><select id="farmSelect" class="select"></select><select id="yearSelect" class="select"></select></div>
+</div>
+<section id="overview" class="view"></section>
+<section id="fields" class="view"></section>
+<section id="analysis" class="view"></section>
+<section id="plan" class="view"></section>
+<section id="history" class="view"></section>
+<section id="genetics" class="view"></section>
+<section id="data" class="view"></section>
+</main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+<script>
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const fmt=(v,d=0)=>v==null?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
+const state={year:2027,dash:null,farm:null,prospect:null,plans:[],fields:[],soils:[],history:null,selectedField:null,fit:null,map:null,draw:false,drawPts:[]};
+async function api(path,o={}){const r=await fetch(path,o);let d={};try{d=await r.json()}catch{}if(r.status===401){location='/farmer-login.html';throw Error('Sign in required')}if(!r.ok)throw Error(d.detail||('HTTP '+r.status));return d}
+function activeView(){return (location.hash||'#overview').slice(1)}
+function syncNav(){const v=activeView();document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active',a.dataset.view===v));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===v))}
+async function logout(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});location='/farmer-login.html'}
+async function boot(){
+  const now=new Date().getFullYear();state.year=now+1;
+  const ys=[state.year-1,state.year,state.year+1];yearSelect.innerHTML=ys.map(y=>'<option '+(y===state.year?'selected':'')+'>'+y+'</option>').join('');
+  yearSelect.onchange=async()=>{state.year=Number(yearSelect.value);await loadFarm();renderAll()};
+  state.dash=await api('/api/farmer/dashboard?crop_year='+state.year);
+  if(!state.dash.farms?.length){document.querySelector('main').innerHTML='<div class="card">No farms are assigned to this account.</div>';return}
+  farmSelect.innerHTML=state.dash.farms.map(f=>'<option value="'+f.id+'">'+esc(f.farm_name||f.producer_name||'Farm')+'</option>').join('');
+  farmSelect.onchange=async()=>{await loadFarm(Number(farmSelect.value));renderAll()};
+  await loadFarm(Number(state.dash.farms[0].id));renderAll();syncNav();
+}
+async function loadFarm(id){
+  state.dash=await api('/api/farmer/dashboard?crop_year='+state.year);
+  state.farm=(state.dash.farms||[]).find(f=>Number(f.id)===Number(id||farmSelect.value))||state.dash.farms[0];
+  farmSelect.value=String(state.farm.id);farmTitle.textContent=state.farm.farm_name||state.farm.producer_name||'My Farm';
+  state.prospect=state.farm.prospect_id?await api('/api/prospects/'+state.farm.prospect_id):null;
+  state.fields=state.prospect?.farm_context?.fields||[];
+  state.soils=state.prospect?.soil_status?.fields||[];
+  const p=await api('/api/farms/'+state.farm.id+'/crop-plans?crop_year='+state.year).catch(()=>({fields:[]}));
+  state.plans=p.fields||[];
+  state.history=await api('/api/farmer/farms/'+state.farm.id+'/history').catch(()=>({history:[],receipts:[]}));
+  if(!state.selectedField||!state.fields.some(f=>Number(f.id)===Number(state.selectedField)))state.selectedField=state.fields[0]?.id||null;
+  state.fit=null;
+}
+function soilFor(id){return state.soils.find(x=>Number(x.field_id)===Number(id))||{}}
+function planFor(id){return state.plans.find(x=>Number(x.field_id)===Number(id))||{}}
+function fieldFor(id){return state.fields.find(x=>Number(x.id)===Number(id))||{}}
+function renderAll(){renderOverview();renderFields();renderAnalysis();renderPlan();renderHistory();renderGenetics();renderData();syncNav()}
+function renderOverview(){
+ const s=state.dash.summary||{},n=Math.max(1,Number(s.fields||0)),pp=Math.round(Number(s.planned||0)/n*100),sp=Math.round(Number(s.seed_selected||0)/n*100);
+ overview.innerHTML='<div class="row"><div><div class="eyebrow">FARM ORGANIZATION</div><h1>'+esc(state.dash.organization_name)+'</h1><div class="muted">'+state.year+' planning year</div></div></div>'+
+ '<div class="grid kpis"><div class="card"><div class="muted">Farms</div><div class="metric">'+(s.farms||0)+'</div></div><div class="card"><div class="muted">Acres</div><div class="metric">'+fmt(s.acres,1)+'</div></div><div class="card"><div class="muted">Fields</div><div class="metric">'+(s.fields||0)+'</div></div><div class="card"><div class="muted">Mapped</div><div class="metric">'+(s.mapped||0)+'/'+(s.fields||0)+'</div></div><div class="card"><div class="muted">APH Fields</div><div class="metric">'+(s.aph_fields||0)+'</div></div><div class="card"><div class="muted">Seed Selected</div><div class="metric">'+(s.seed_selected||0)+'</div></div></div>'+
+ '<div class="hero"><div class="eyebrow" style="color:#dce9df">MAP ONCE → UPDATE APH → PLAN ROTATION → FIT GENETICS → TRACK PERFORMANCE</div><h2 style="margin-top:7px">One farm record that gets smarter every season.</h2><p>Boundaries and soils stay permanent. APH, crop rotation, seed choices and yield results update by year.</p></div>'+
+ '<div class="grid two" style="margin-top:14px"><div class="card"><div class="row"><b>Crop Plan Progress</b><span>'+pp+'%</span></div><div class="progress" style="margin-top:9px"><i style="width:'+pp+'%"></i></div><div class="muted" style="font-size:12px;margin-top:7px">'+(s.planned||0)+' of '+(s.fields||0)+' fields assigned a crop.</div></div><div class="card"><div class="row"><b>Seed Placement Progress</b><span>'+sp+'%</span></div><div class="progress" style="margin-top:9px"><i style="width:'+sp+'%"></i></div><div class="muted" style="font-size:12px;margin-top:7px">'+(s.seed_selected||0)+' of '+(s.fields||0)+' fields have genetics selected.</div></div></div>';
+}
+function renderFields(){
+ const mapped=state.soils.filter(s=>s.boundary_geojson).length,refs=state.soils.filter(s=>!s.boundary_geojson&&s.metadata_json?.reference_boundary_geojson).length;
+ fields.innerHTML='<div class="row"><div><div class="eyebrow">FIELDS & MAPPING</div><h1>Set the farm up once.</h1><div class="muted">Confirm the fields, acres and soils. After that, only update what changes.</div></div><button class="btn" onclick="confirmAll()">Confirm All Fields</button></div>'+
+ '<div class="grid two" style="margin-top:16px"><div><div id="farmMap" class="map"></div><div class="toolbar"><button class="btn secondary" onclick="startDraw()">Draw New Field</button><button class="btn secondary" onclick="finishDraw()">Save Drawn Field</button><button class="btn outline" onclick="cancelDraw()">Cancel Drawing</button></div><div id="drawMsg" class="muted" style="font-size:12px"></div></div>'+
+ '<div class="card"><div class="row"><div><h2>My Fields</h2><div class="muted" style="font-size:12px">'+mapped+' mapped • '+refs+' ready to confirm</div></div></div><div class="field-list">'+state.fields.map(f=>{const s=soilFor(f.id),p=planFor(f.id);return '<div class="field-item" onclick="state.selectedField='+f.id+';location.hash=\'#analysis\';renderAnalysis()"><div class="row"><b>'+esc(f.name)+'</b><span>'+fmt(f.acres,1)+' ac</span></div><div style="margin-top:5px">'+(s.boundary_geojson?'<span class="tag">Mapped</span>':s.metadata_json?.reference_boundary_geojson?'<span class="tag warn">Confirm boundary</span>':'<span class="tag warn">Map needed</span>')+' '+(s.soil_status?'<span class="tag">Soils ready</span>':'<span class="tag warn">Soils pending</span>')+' '+(p.crop?'<span class="tag">'+esc(p.crop)+'</span>':'')+'</div></div>'}).join('')+'</div></div></div>'+
+ '<div class="grid two" style="margin-top:14px"><div class="card"><h2>Upload / Update Field Map</h2><div class="upload"><select id="mapType" class="select"><option value="MBAR">MBAR / acreage map</option><option value="SOI">Mapped SOI</option></select><input id="mapFile" style="display:block;margin-top:10px" type="file" accept=".pdf,.csv,.xlsx,.xlsm,.json,.geojson"><button class="btn" style="margin-top:10px" onclick="uploadDoc(\'map\')">Upload Field Map</button></div><div id="mapUploadMsg" class="muted" style="margin-top:8px"></div></div><div class="card"><h2>Update APH</h2><div class="upload"><input id="aphFile" type="file" accept=".pdf,.csv,.xlsx,.xlsm"><button class="btn" style="margin-top:10px" onclick="uploadDoc(\'aph\')">Upload APH</button></div><div class="muted" style="margin-top:8px">APH attaches to the permanent fields; it does not rebuild the farm.</div><div id="aphUploadMsg" class="muted" style="margin-top:8px"></div></div></div>';
+ setTimeout(initMap,0);
+}
+function initMap(){
+ if(!document.getElementById('farmMap')||typeof maplibregl==='undefined')return;if(state.map){state.map.remove();state.map=null}
+ state.map=new maplibregl.Map({container:'farmMap',center:[-96.3,39.7],zoom:7,style:{version:8,sources:{imagery:{type:'raster',tiles:['https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}'],tileSize:256}},layers:[{id:'imagery',type:'raster',source:'imagery'}]}});
+ state.map.addControl(new maplibregl.NavigationControl(),'top-right');
+ state.map.on('load',()=>{const feats=state.soils.filter(s=>s.boundary_geojson).map(s=>({type:'Feature',properties:{id:s.field_id,name:s.name},geometry:s.boundary_geojson}));const refs=state.soils.filter(s=>!s.boundary_geojson&&s.metadata_json?.reference_boundary_geojson).map(s=>({type:'Feature',properties:{id:s.field_id,name:s.name},geometry:s.metadata_json.reference_boundary_geojson}));state.map.addSource('fields',{type:'geojson',data:{type:'FeatureCollection',features:feats}});state.map.addLayer({id:'fieldFill',type:'fill',source:'fields',paint:{'fill-color':'#2d8757','fill-opacity':.18}});state.map.addLayer({id:'fieldLine',type:'line',source:'fields',paint:{'line-color':'#155932','line-width':2}});state.map.addSource('refs',{type:'geojson',data:{type:'FeatureCollection',features:refs}});state.map.addLayer({id:'refFill',type:'fill',source:'refs',paint:{'fill-color':'#d5a23a','fill-opacity':.12}});state.map.addLayer({id:'refLine',type:'line',source:'refs',paint:{'line-color':'#b27d14','line-width':2,'line-dasharray':[2,2]}});const b=new maplibregl.LngLatBounds();[...feats,...refs].forEach(f=>turf.coordEach(f,c=>b.extend(c)));if(!b.isEmpty())state.map.fitBounds(b,{padding:45,maxZoom:15});});
+}
+async function confirmAll(){if(!confirm('Confirm all available mapped field boundaries for this farm?'))return;const r=await api('/api/farms/'+state.farm.id+'/boundaries/confirm-all?include_review=true',{method:'POST'});await loadFarm(state.farm.id);renderAll();alert((r.confirmed_count||0)+' fields confirmed.')}
+function startDraw(){if(!state.map)return;state.draw=true;state.drawPts=[];drawMsg.textContent='Click around the field boundary. Use Save Drawn Field when finished.';state.map.getCanvas().style.cursor='crosshair';state.map.on('click',drawClick)}
+function drawClick(e){if(state.draw)state.drawPts.push([e.lngLat.lng,e.lngLat.lat])}
+function cancelDraw(){if(state.map)state.map.off('click',drawClick);state.draw=false;state.drawPts=[];if(document.getElementById('drawMsg'))drawMsg.textContent=''}
+async function finishDraw(){if(state.drawPts.length<3)return alert('Click at least 3 points around the field.');const pts=[...state.drawPts,state.drawPts[0]],geom={type:'Polygon',coordinates:[pts]},ac=turf.area({type:'Feature',geometry:geom,properties:{}})/4046.8564224,name=prompt('Field name?','New Field');if(!name)return;await api('/api/farms/'+state.farm.id+'/fields/manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,boundary_geojson:geom,acres:Number(ac.toFixed(2)),irrigation:'NIRR',enrich_soils:true,base_boundary_geojson:geom,cut_polygons:[]})});cancelDraw();await loadFarm(state.farm.id);renderAll()}
+async function uploadDoc(kind){const file=kind==='map'?mapFile.files[0]:aphFile.files[0];if(!file)return alert('Choose a file first.');const fd=new FormData();fd.append('file',file);fd.append('target_farm_id',String(state.farm.id));fd.append('document_type',kind==='map'?mapType.value:'APH');const out=kind==='map'?mapUploadMsg:aphUploadMsg;out.textContent='Uploading…';try{const r=await api('/api/documents/upload',{method:'POST',body:fd});out.textContent='Saved. Farm record updated.';await loadFarm(state.farm.id);renderAll()}catch(e){out.textContent=e.message}}
+async function loadFit(fid=state.selectedField){
+ state.selectedField=Number(fid);const f=fieldFor(fid),p=planFor(fid),crop=String(p.crop||f.crop||'').toUpperCase();if(!crop){state.fit={error:'Assign a crop first.',recommendations:[]};return}
+ state.fit=await api('/api/fields/'+fid+'/channel-fit?crop_year='+state.year+'&limit=8').catch(e=>({error:e.message,recommendations:[]}));
+}
+function renderAnalysis(){
+ const f=fieldFor(state.selectedField)||state.fields[0]||{},p=planFor(f.id),s=soilFor(f.id),crop=String(p.crop||f.crop||'').toUpperCase(),recs=state.fit?.recommendations||[];
+ analysis.innerHTML='<div class="row"><div><div class="eyebrow">FIELD ANALYSIS</div><h1>Work one field at a time.</h1><div class="muted">Set the crop, adjust maturity preference, then choose genetics.</div></div><select class="select" onchange="state.selectedField=Number(this.value);state.fit=null;renderAnalysis()">'+state.fields.map(x=>'<option value="'+x.id+'" '+(Number(x.id)===Number(f.id)?'selected':'')+'>'+esc(x.name)+'</option>').join('')+'</select></div>'+
+ '<div class="grid two" style="margin-top:16px"><div class="card"><div class="row"><div><h2>'+esc(f.name||'Field')+'</h2><div class="muted">'+fmt(f.acres,1)+' acres • '+esc(s.dominant_muname||'Soil pending')+'</div></div><div><button class="btn small '+(crop==='CORN'?'':'secondary')+'" onclick="setCrop('+f.id+',\'CORN\')">Corn</button> <button class="btn small '+(crop==='SOYBEANS'?'':'secondary')+'" onclick="setCrop('+f.id+',\'SOYBEANS\')">Soybeans</button></div></div>'+
+ (crop?rmHtml(crop):'<div class="callout warn" style="margin-top:12px">Choose the crop before running genetics fit.</div>')+
+ '<button class="btn" style="margin-top:12px" onclick="runAnalysis('+f.id+')">Run Field Analysis</button></div>'+
+ '<div class="card"><h2>Field Snapshot</h2><table class="table"><tr><td>Water</td><td><b>'+esc(p.irrigation||f.irrigation||'—')+'</b></td></tr><tr><td>Soil</td><td><b>'+esc(s.dominant_muname||s.dominant_musym||'Pending')+'</b></td></tr><tr><td>AWC</td><td><b>'+(s.weighted_aws150_cm==null?'—':Number(s.weighted_aws150_cm).toFixed(1)+' cm')+'</b></td></tr><tr><td>Slope</td><td><b>'+(s.weighted_slope_pct==null?'—':Number(s.weighted_slope_pct).toFixed(1)+'%')+'</b></td></tr><tr><td>Selected seed</td><td><b>'+esc(p.selected_seed_name||'Not selected')+'</b></td></tr></table></div></div>'+
+ '<div class="card" style="margin-top:14px"><h2>Genetics Fit</h2>'+(state.fit?.error?'<div class="callout warn">'+esc(state.fit.error)+'</div>':recs.length?recs.map((r,i)=>'<div class="rec '+(i===0?'top':'')+'"><div class="row"><div><div class="eyebrow">#'+(i+1)+(i===0?' TOP FIT':'')+'</div><h3 style="margin:3px 0">'+esc((r.brand? r.brand+' ':'')+r.product_name)+'</h3><span class="tag">'+(r.relative_maturity??'—')+' RM</span></div><div class="score">'+Number(r.fit_score||0).toFixed(0)+'%</div></div><div class="muted" style="font-size:12px;margin-top:7px">'+esc((r.agronomy_rules_fired||[]).slice(0,3).join(' • '))+'</div><button class="btn small" style="margin-top:9px" onclick="chooseSeed('+f.id+','+r.seed_product_id+','+(r.recommended_population||'null')+')">Use This Product</button></div>').join(''):'<div class="muted">Run Field Analysis to see recommendations.</div>')+'</div>';
+}
+function rmHtml(crop){const min=crop==='SOYBEANS'?0:70,max=crop==='SOYBEANS'?8:125,step=crop==='SOYBEANS'?.1:1;return '<div style="margin-top:14px"><b>Preferred maturity range</b><div class="rm" style="margin-top:8px"><span>Earliest</span><input id="rmMin" type="range" min="'+min+'" max="'+max+'" step="'+step+'" value="'+(crop==='SOYBEANS'?2.5:95)+'" oninput="rmMinVal.textContent=this.value"><b id="rmMinVal">'+(crop==='SOYBEANS'?2.5:95)+'</b></div><div class="rm" style="margin-top:8px"><span>Latest</span><input id="rmMax" type="range" min="'+min+'" max="'+max+'" step="'+step+'" value="'+(crop==='SOYBEANS'?4.2:112)+'" oninput="rmMaxVal.textContent=this.value"><b id="rmMaxVal">'+(crop==='SOYBEANS'?4.2:112)+'</b></div></div>'}
+async function setCrop(fid,crop){await api('/api/fields/'+fid+'/crop',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:state.year,crop})});await loadFarm(state.farm.id);state.selectedField=fid;state.fit=null;renderAll()}
+async function runAnalysis(fid){if(document.getElementById('rmMin'))await api('/api/fields/'+fid+'/rm-preference',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:state.year,rm_min:Number(rmMin.value),rm_max:Number(rmMax.value)})}).catch(()=>{});await loadFit(fid);renderAnalysis()}
+async function chooseSeed(fid,seed,pop){const p=planFor(fid),crop=String(p.crop||fieldFor(fid).crop||'').toUpperCase();await api('/api/fields/'+fid+'/seed-plan',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:state.year,yield_goal:p.yield_goal??null,target_population:pop,seed_product_id:seed,seed_price_per_unit:null,seeds_per_unit:crop==='CORN'?80000:140000,pricing_source:'farmer'})});await loadFarm(state.farm.id);state.selectedField=fid;await loadFit(fid);renderAll()}
+function renderPlan(){
+ const planned=state.plans.filter(x=>x.crop).length,seeded=state.plans.filter(x=>x.selected_seed_product_id||x.selected_seed_name).length;
+ plan.innerHTML='<div class="row"><div><div class="eyebrow">ANNUAL CROP PLAN</div><h1>Plan the whole farm.</h1><div class="muted">Rotation first. Genetics second. Keep manual choices where you want them.</div></div><div><button class="btn secondary" onclick="rotateAll()">Rotate from '+(state.year-1)+'</button> <button class="btn" onclick="autoPlan()">Auto-fill Missing Genetics</button></div></div>'+
+ '<div class="grid three" style="margin:16px 0"><div class="card"><div class="muted">Fields</div><div class="metric">'+state.plans.length+'</div></div><div class="card"><div class="muted">Crop Assigned</div><div class="metric">'+planned+'</div></div><div class="card"><div class="muted">Seed Selected</div><div class="metric">'+seeded+'</div></div></div>'+
+ '<div class="card"><div style="overflow:auto"><table class="table"><thead><tr><th>Field</th><th>Acres</th><th>Water</th><th>Crop</th><th>Seed</th><th>Population</th><th></th></tr></thead><tbody>'+state.plans.map(r=>'<tr><td><b>'+esc(r.name||r.field_name||('Field '+r.field_id))+'</b></td><td>'+fmt(r.acres,1)+'</td><td>'+esc(r.irrigation||'—')+'</td><td><select class="select" onchange="setCrop('+r.field_id+',this.value)"><option value="">—</option><option value="CORN" '+(r.crop==='CORN'?'selected':'')+'>Corn</option><option value="SOYBEANS" '+(r.crop==='SOYBEANS'?'selected':'')+'>Soybeans</option></select></td><td>'+esc(r.selected_seed_name||'Not selected')+'</td><td>'+fmt(r.target_population)+'</td><td><button class="btn small secondary" onclick="state.selectedField='+r.field_id+';state.fit=null;location.hash=\'#analysis\';renderAnalysis()">Review Field</button></td></tr>').join('')+'</tbody></table></div></div>';
+}
+async function rotateAll(){await api('/api/farms/'+state.farm.id+'/rotate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from_year:state.year-1,to_year:state.year})});await loadFarm(state.farm.id);renderAll()}
+async function autoPlan(){if(!confirm('Fill only fields that do not already have a seed selection?'))return;await api('/api/farms/'+state.farm.id+'/channel-auto-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:state.year,overwrite_existing:false})});await loadFarm(state.farm.id);renderAll()}
+function renderHistory(){
+ const h=state.history?.history||[],receipts=state.history?.receipts||[];
+ history.innerHTML='<div><div class="eyebrow">PLANTING & PERFORMANCE</div><h1>What worked on this farm?</h1><div class="muted">Keep varieties, APH and realized yield tied to the field over time.</div></div>'+
+ '<div class="grid two" style="margin-top:16px"><div class="card"><h2>Field History</h2><div style="overflow:auto"><table class="table"><thead><tr><th>Year</th><th>Field</th><th>Crop</th><th>Seed</th><th>Yield</th><th>Vs Prior</th></tr></thead><tbody>'+h.map(r=>'<tr><td><b>'+esc(r.crop_year||'—')+'</b></td><td>'+esc(r.field_name||'—')+'</td><td>'+esc(r.crop||'—')+'</td><td>'+esc([r.seed_brand,r.seed_product_name].filter(Boolean).join(' ')||'Not recorded')+'</td><td><b>'+(r.yield_value==null?'—':Number(r.yield_value).toFixed(1))+'</b></td><td>'+(r.yield_change_pct==null?'—':(Number(r.yield_change_pct)>0?'+':'')+Number(r.yield_change_pct).toFixed(1)+'%')+'</td></tr>').join('')+'</tbody></table></div></div>'+
+ '<div><div class="card"><h2>Seed Receipt Upload</h2><div class="upload"><input id="receiptFile" type="file" accept=".pdf,.csv,.xlsx,.xlsm,.txt"><button class="btn" style="margin-top:10px" onclick="uploadReceipt()">Upload Receipt</button></div><div id="receiptMsg" class="muted" style="margin-top:8px"></div></div><div class="card" style="margin-top:14px"><h2>Receipt Archive</h2>'+(receipts.length?receipts.map(r=>'<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>'+esc(r.original_name)+'</b><div class="muted" style="font-size:11px">'+esc(r.uploaded_at||'')+'</div></div>').join(''):'<div class="muted">No receipts uploaded yet.</div>')+'</div></div></div>';
+}
+async function uploadReceipt(){const file=receiptFile.files[0];if(!file)return alert('Choose a receipt.');const fd=new FormData();fd.append('file',file);fd.append('document_type','SEED_RECEIPT');fd.append('target_farm_id',String(state.farm.id));receiptMsg.textContent='Uploading…';try{await api('/api/documents/upload',{method:'POST',body:fd});receiptMsg.textContent='Receipt saved.';await loadFarm(state.farm.id);renderAll()}catch(e){receiptMsg.textContent=e.message}}
+function renderGenetics(){
+ const rows=state.plans,sel=rows.filter(x=>x.selected_seed_name||x.selected_seed_product_id);
+ genetics.innerHTML='<div class="row"><div><div class="eyebrow">SEED GENETICS</div><h1>Review the farm seed plan.</h1><div class="muted">This is the simple whole-farm view. Use Field Analysis when you want to change a field.</div></div></div>'+
+ '<div class="grid three" style="margin:16px 0"><div class="card"><div class="muted">Fields</div><div class="metric">'+rows.length+'</div></div><div class="card"><div class="muted">Selected</div><div class="metric">'+sel.length+'</div></div><div class="card"><div class="muted">Need Decision</div><div class="metric">'+(rows.length-sel.length)+'</div></div></div>'+
+ '<div class="card"><div style="overflow:auto"><table class="table"><thead><tr><th>Field</th><th>Crop</th><th>Acres</th><th>Selected Genetics</th><th></th></tr></thead><tbody>'+rows.map(r=>'<tr><td><b>'+esc(r.name||r.field_name||('Field '+r.field_id))+'</b></td><td>'+esc(r.crop||'Not set')+'</td><td>'+fmt(r.acres,1)+'</td><td>'+(r.selected_seed_name?'<span class="tag">'+esc(r.selected_seed_name)+'</span>':'<span class="muted">Not selected</span>')+'</td><td><button class="btn small secondary" onclick="state.selectedField='+r.field_id+';state.fit=null;location.hash=\'#analysis\';renderAnalysis()">'+(r.selected_seed_name?'Review':'Analyze')+'</button></td></tr>').join('')+'</tbody></table></div></div>';
+}
+function renderData(){
+ const s=state.dash.summary||{};
+ data.innerHTML='<div class="row"><div><div class="eyebrow">FARM DATA HUB</div><h1>Update only what changed.</h1><div class="muted">The farm record stays permanent. Add the newest documents each season.</div></div></div>'+
+ '<div class="grid three" style="margin:16px 0"><div class="card"><div class="muted">Mapped</div><div class="metric">'+(s.mapped||0)+'/'+(s.fields||0)+'</div></div><div class="card"><div class="muted">APH Fields</div><div class="metric">'+(s.aph_fields||0)+'</div></div><div class="card"><div class="muted">Acres</div><div class="metric">'+fmt(s.acres,1)+'</div></div></div>'+
+ '<div class="grid two"><div class="card"><h2>Upload Farm Document</h2><select id="docType" class="select" style="width:100%"><option value="APH">APH — yearly production history</option><option value="MBAR">MBAR — field map</option><option value="SOI">Mapped SOI — field reference</option><option value="SEED_RECEIPT">Seed Receipt</option></select><div class="upload" style="margin-top:10px"><input id="docFile" type="file" accept=".pdf,.csv,.xlsx,.xlsm,.json,.txt"><button class="btn" style="margin-top:10px" onclick="uploadDataDoc()">Upload to My Farm</button></div><div id="docMsg" class="muted" style="margin-top:8px"></div></div><div class="card"><h2>Yearly Checklist</h2><div class="callout"><b>Before planning</b><br>Check fields → add new ground → upload APH.</div><div class="callout" style="margin-top:9px"><b>Before seed ordering</b><br>Set crop rotation → review Field Analysis → choose genetics.</div><div class="callout" style="margin-top:9px"><b>After harvest</b><br>Keep yield and planted genetics attached to the field.</div></div></div>';
+}
+async function uploadDataDoc(){const file=docFile.files[0];if(!file)return alert('Choose a file.');const fd=new FormData();fd.append('file',file);fd.append('document_type',docType.value);fd.append('target_farm_id',String(state.farm.id));docMsg.textContent='Uploading…';try{await api('/api/documents/upload',{method:'POST',body:fd});docMsg.textContent='Saved to farm record.';await loadFarm(state.farm.id);renderAll()}catch(e){docMsg.textContent=e.message}}
+window.addEventListener('hashchange',()=>{syncNav();if(activeView()==='analysis'&&!state.fit)renderAnalysis()});
+boot().catch(e=>document.querySelector('main').innerHTML='<div class="card"><b>Could not load AcreFit Farmer.</b><div class="muted">'+esc(e.message)+'</div></div>');
+</script>
+</body></html>

@@ -5,13 +5,13 @@
 *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{background:var(--dark);color:#fff;padding:22px 18px;position:sticky;top:0;height:100vh}.brand{font-size:25px;font-weight:900}.brand span{color:#8fd39f}.subbrand{font-size:12px;color:#a9c1b1;margin-top:4px}nav{display:grid;gap:7px;margin-top:28px}nav a{color:#dce8df;text-decoration:none;padding:11px 12px;border-radius:10px;font-size:14px}nav a:hover,nav a.active{background:#1d4b33}.main{padding:28px 32px 48px}.hero{background:linear-gradient(135deg,#123822,#1f6f43);color:#fff;border-radius:18px;padding:22px}.hero p{color:#c9ddcf;margin:6px 0 0}.row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}.grid{display:grid;gap:16px}.kpis{grid-template-columns:repeat(4,1fr);margin:16px 0}.cols{grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr)}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}.muted{color:var(--muted)}.metric{font-size:28px;font-weight:850}.btn{display:inline-block;border:0;background:var(--green);color:#fff;border-radius:9px;padding:9px 12px;font-weight:800;text-decoration:none;cursor:pointer}.btn.secondary{background:#eaf2ed;color:#17452d}.btn.outline{background:#fff;color:var(--ink);border:1px solid var(--line)}.btn:disabled{opacity:.5}.select,.input{padding:9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}.tag{display:inline-block;padding:5px 8px;border-radius:999px;background:var(--lime);font-size:11px;font-weight:750;margin:2px 4px 2px 0}.tag.warn{background:var(--warn);color:#805c17}.callout{border-left:4px solid var(--green);background:#f5faf6;padding:12px 14px;border-radius:0 10px 10px 0}.callout.warn{border-left-color:#c28a21;background:var(--warn)}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:left;font-size:12px;vertical-align:top}.table th{font-size:10px;text-transform:uppercase;color:var(--muted);letter-spacing:.05em}.field-list{display:grid;gap:7px;max-height:610px;overflow:auto}.field-item{border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff;cursor:pointer}.field-item.active{border-color:var(--green);box-shadow:0 0 0 1px var(--green);background:#f8fcf9}.field-item:hover{border-color:#8db49a}.score{font-size:26px;font-weight:900;color:var(--green)}.rec{border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:10px}.rec.top{border:2px solid var(--green);background:#fbfefc}.rec-head{display:flex;justify-content:space-between;gap:10px}.rule{font-size:12px;padding:7px 9px;background:#f7faf8;border-radius:8px;margin:5px 0}.risk{display:grid;grid-template-columns:145px 1fr 48px;gap:10px;align-items:center;font-size:12px;margin:10px 0}.bar{height:8px;background:#e8eee9;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:#2f8f5b;border-radius:999px}.workflow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px;font-size:12px}.workflow a{color:#17452d;text-decoration:none;font-weight:750}.workflow .current{background:#eaf2ed;padding:5px 8px;border-radius:999px}.loading{padding:30px;text-align:center;color:var(--muted)}.rm-box{background:#f8fbf8;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}.rm-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.rm-row{display:grid;grid-template-columns:92px 1fr 54px;gap:10px;align-items:center;font-size:12px}.rm-row input[type=range]{width:100%;accent-color:var(--green)}.rm-value{font-weight:900;text-align:right}.rm-note{font-size:11px;color:var(--muted);margin-top:8px}@media(max-width:1000px){.app{grid-template-columns:1fr}.sidebar{height:auto;position:relative}.kpis,.cols{grid-template-columns:1fr}.main{padding:18px}}
 </style><link rel="icon" href="/acrefit-icon.svg"></head>
 <body><div class="app"><aside class="sidebar"><div class="brand"><img src="/acrefit-farmer-logo-light.svg" alt="AcreFit Farmer" style="height:42px;width:auto;max-width:205px;display:block"></div><div class="subbrand">Your farm. Your fields. Your seed plan.</div><nav>
-<a href="/farmer-dashboard.html">Farm Overview</a>
-<a href="/farmer-fields.html">Fields & Mapping</a>
-<a class="active" href="/farmer-/farmer-field-analysis.html">Field Analysis</a>
-<a href="/farmer-plan.html">Annual Crop Plan</a>
-<a href="/farmer-history.html">Planting & Performance</a>
-<a href="/farmer-/farmer-genetics.html">Seed Genetics</a>
-<a href="/farmer-data.html">Farm Data Hub</a>
+<a id="ffOverview" href="/farmer-dashboard.html">Farm Overview</a>
+<a id="ffFields" href="/farmer-fields.html">Fields & Mapping</a>
+<a id="ffAnalysis" class="active" href="/farmer-field-analysis.html">Field Analysis</a>
+<a id="ffPlan" href="/farmer-plan.html">Annual Crop Plan</a>
+<a id="ffHistory" href="/farmer-history.html">Planting & Performance</a>
+<a id="ffGenetics" href="/farmer-genetics.html">Seed Genetics</a>
+<a id="ffData" href="/farmer-data.html">Farm Data Hub</a>
 </nav><div class="side-card"><b>Farmer workflow</b><br><br>1. Map fields<br>2. Update APH<br>3. Set crop rotation<br>4. Review field fit<br>5. Choose genetics<br>6. Track results</div></aside><main class="main"><div id="content" class="loading">Loading live field analysis…</div></main></div>
 <script>
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -85,4 +85,26 @@ function render(){const f=current.field,p=current.plan,s=current.soil,ctx=fit?.f
 </div></div>`}
 async function boot(){if(!prospectId){const ps=await api('/api/prospects');if(!ps.length)throw new Error('No prospect farms found');prospectId=Number(ps[0].id)}prospect=await api('/api/prospects/'+prospectId);fields=(prospect.farm_context||{}).fields||[];soilRows=(prospect.soil_status||{}).fields||[];const r=await api('/api/farms/'+prospect.farm_id+'/crop-plans?crop_year='+year);plans=r.fields||[];if(!fieldId&&fields.length)fieldId=Number(fields[0].id);await loadField(false)}
 boot().catch(e=>document.getElementById('content').innerHTML='<div class="card"><b>Could not load Field Analysis.</b><br>'+esc(e.message)+'</div>');
-</script><script src="/activity.js"></script></body></html>
+</script><script src="/activity.js"></script><script>
+(function(){
+  async function wireFarmerNav(){
+    const q=new URLSearchParams(location.search);
+    let pid=Number(q.get('id'))||null, yr=Number(q.get('year'))||2027;
+    try{
+      if(!pid){
+        const r=await fetch('/api/farmer/dashboard?crop_year='+yr);
+        if(r.ok){const d=await r.json();pid=Number((d.farms||[])[0]?.prospect_id)||null;}
+      }
+    }catch{}
+    const set=(id,url)=>{const el=document.getElementById(id);if(el)el.href=url};
+    set('ffOverview','/farmer-dashboard.html');
+    set('ffFields',pid?'/farmer-fields.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffAnalysis',pid?'/farmer-field-analysis.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffPlan',pid?'/farmer-plan.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffHistory','/farmer-history.html');
+    set('ffGenetics',pid?'/farmer-genetics.html?id='+pid+'&year='+yr:'/farmer-genetics.html');
+    set('ffData','/farmer-data.html');
+  }
+  wireFarmerNav();
+})();
+</script></body></html>

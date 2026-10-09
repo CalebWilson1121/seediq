@@ -12,13 +12,13 @@
 </style>
 <link rel="icon" href="/acrefit-icon.svg"></head>
 <body><div class="app"><aside class="sidebar"><div class="brand"><img src="/acrefit-farmer-logo-light.svg" alt="AcreFit Farmer" style="height:42px;width:auto;max-width:205px;display:block"></div><div class="subbrand">Your farm. Your fields. Your seed plan.</div><nav>
-<a href="/farmer-dashboard.html">Farm Overview</a>
-<a class="active" href="/farmer-fields.html">Fields & Mapping</a>
-<a href="/farmer-/farmer-field-analysis.html">Field Analysis</a>
-<a href="/farmer-plan.html">Annual Crop Plan</a>
-<a href="/farmer-history.html">Planting & Performance</a>
-<a href="/farmer-/farmer-genetics.html">Seed Genetics</a>
-<a href="/farmer-data.html">Farm Data Hub</a>
+<a id="ffOverview" href="/farmer-dashboard.html">Farm Overview</a>
+<a id="ffFields" class="active" href="/farmer-fields.html">Fields & Mapping</a>
+<a id="ffAnalysis" href="/farmer-field-analysis.html">Field Analysis</a>
+<a id="ffPlan" href="/farmer-plan.html">Annual Crop Plan</a>
+<a id="ffHistory" href="/farmer-history.html">Planting & Performance</a>
+<a id="ffGenetics" href="/farmer-genetics.html">Seed Genetics</a>
+<a id="ffData" href="/farmer-data.html">Farm Data Hub</a>
 </nav><div class="side-card"><b>Farmer workflow</b><br><br>1. Map fields<br>2. Update APH<br>3. Set crop rotation<br>4. Review field fit<br>5. Choose genetics<br>6. Track results</div></aside><main class="main"><div id="content"><div class="card">Loading farm fields…</div></div></main></div>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.7.1/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
@@ -362,4 +362,26 @@ async function refreshHistoricalWeather(btn){try{if(btn){btn.disabled=true;btn.t
 async function uploadMapDocument(){const f=document.getElementById('mbarFile').files[0],m=document.getElementById('mbarMsg'),b=document.getElementById('mbarBtn'),selectedType=document.getElementById('mapDocType').value;if(!f)return alert('Choose a mapped field document.');m.style.display='block';m.className='callout';m.textContent='Preparing secure upload…';b.disabled=true;try{const signed=await api('/api/uploads/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,content_type:f.type||'application/octet-stream'})});m.textContent='Uploading document directly to secure storage…';const uploadBody=new FormData();uploadBody.append('cacheControl','3600');uploadBody.append('',f);const up=await fetch(signed.signed_url,{method:'PUT',body:uploadBody});if(!up.ok){let txt='';try{txt=await up.text()}catch{}throw new Error('Secure upload failed (HTTP '+up.status+') '+txt.slice(0,140))}m.textContent='Reading field identity, map geometry, and validating boundaries…';const docType=selectedType==='AUTO'?null:selectedType;const r=await api('/api/uploads/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({object_path:signed.object_path,original_name:f.name,document_type:docType,target_farm_id:prospect.farm_id,reprocess:false})});prospect=await api('/api/prospects/'+id);let boundaryResult=null;if(String(r.document_type||'').toUpperCase()==='SOI'){m.textContent='Field map parsed. Auto-confirming QA-passed boundaries…';try{boundaryResult=await api('/api/farms/'+prospect.farm_id+'/boundaries/confirm-all',{method:'POST'});if((boundaryResult.confirmed_count||0)>0){m.textContent='Boundaries confirmed. Pulling SSURGO soils…';try{await api('/api/prospects/'+id+'/soils/enrich?force=false',{method:'POST'})}catch(_){}}}catch(_){}prospect=await api('/api/prospects/'+id);await applySOICropBase(null,true)}else await loadPlans();await loadAPHData();const created=(r.fields_created_or_updated||0),ids=(r.soi_identities_stored||0),confirmed=boundaryResult?.confirmed_count||0,review=boundaryResult?.review_count||0;m.innerHTML='<b>Field map ready.</b> '+(ids?ids+' SOI field identities read. ':created+' fields created/updated. ')+(confirmed?'<b>'+confirmed+' boundaries passed QA and were confirmed automatically.</b> ':'')+(review?'<b>'+review+' need review.</b> ':'')+((r.warnings||[]).map(esc).join(' ')||'');render()}catch(e){m.className='callout warn';m.innerHTML='<b>Field import needs mapping work.</b> '+esc(e.message)}finally{b.disabled=false}}
 async function mapSoils(){try{await api('/api/prospects/'+id+'/soils/enrich?force=false',{method:'POST'});prospect=await api('/api/prospects/'+id);render()}catch(e){alert(e.message)}}
 load();
-</script><script src="/activity.js"></script></body></html>
+</script><script src="/activity.js"></script><script>
+(function(){
+  async function wireFarmerNav(){
+    const q=new URLSearchParams(location.search);
+    let pid=Number(q.get('id'))||null, yr=Number(q.get('year'))||2027;
+    try{
+      if(!pid){
+        const r=await fetch('/api/farmer/dashboard?crop_year='+yr);
+        if(r.ok){const d=await r.json();pid=Number((d.farms||[])[0]?.prospect_id)||null;}
+      }
+    }catch{}
+    const set=(id,url)=>{const el=document.getElementById(id);if(el)el.href=url};
+    set('ffOverview','/farmer-dashboard.html');
+    set('ffFields',pid?'/farmer-fields.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffAnalysis',pid?'/farmer-field-analysis.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffPlan',pid?'/farmer-plan.html?id='+pid+'&year='+yr:'/farmer-dashboard.html');
+    set('ffHistory','/farmer-history.html');
+    set('ffGenetics',pid?'/farmer-genetics.html?id='+pid+'&year='+yr:'/farmer-genetics.html');
+    set('ffData','/farmer-data.html');
+  }
+  wireFarmerNav();
+})();
+</script></body></html>

@@ -2,11 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {"source": "/api/:path*", "destination": "https://seediq-green.vercel.app/api/:path*"},
-    {"source": "/prospect-detail.html", "destination": "https://seediq-green.vercel.app/prospect-detail.html"},
-    {"source": "/field-analysis.html", "destination": "https://seediq-green.vercel.app/field-analysis.html"},
-    {"source": "/whole-farm-plan.html", "destination": "https://seediq-green.vercel.app/whole-farm-plan.html"},
-    {"source": "/genetics.html", "destination": "https://seediq-green.vercel.app/genetics.html"},
-    {"source": "/data-hub.html", "destination": "https://seediq-green.vercel.app/data-hub.html"},
     {"source": "/styles.css", "destination": "https://seediq-green.vercel.app/styles.css"},
     {"source": "/activity.js", "destination": "https://seediq-green.vercel.app/activity.js"},
     {"source": "/acrefit-logo.svg", "destination": "https://seediq-green.vercel.app/acrefit-logo.svg"},

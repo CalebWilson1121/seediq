@@ -558,8 +558,8 @@ def farmer_dashboard(request: Request, crop_year: int = 2027):
             summary["planned"] = int(plan.get("planned") or 0)
             summary["seed_selected"] = int(plan.get("seed_selected") or 0)
             aph = conn.execute(
-                f"SELECT COUNT(DISTINCT pr.field_id) AS aph_fields FROM production_records pr "
-                f"JOIN fields f ON f.id=pr.field_id WHERE f.farm_id IN ({placeholders})",
+                f"SELECT COUNT(DISTINCT cr.field_id) AS aph_fields FROM crop_records cr "
+                f"JOIN fields f ON f.id=cr.field_id WHERE cr.field_id IS NOT NULL AND f.farm_id IN ({placeholders})",
                 tuple(farm_ids),
             ).fetchone()
             summary["aph_fields"] = int(aph.get("aph_fields") or 0)

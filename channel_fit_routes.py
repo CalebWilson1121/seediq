@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from aph_utils import collapse_production_records, match_identity, record_identity
+from auth_service import current_user
 from database import connect, rows_to_dicts
 from climate_service import current_enso_outlook
 from agronomy_rules import ENGINE_VERSION as AGRONOMY_ENGINE_VERSION, evaluate_agronomy, rules_catalog
@@ -920,13 +921,13 @@ def channel_fit(field_id: int, request: Request, crop_year: int = 2027, limit: i
         if crop not in {"CORN", "SOYBEANS"}:
             raise HTTPException(status_code=400, detail="Assign Corn or Soybeans to this field first")
         org_id = row.get("organization_id")
-        farmer_mode = False
-        try:
-            from server import _user, _role
-            current = _user(request)
-            farmer_mode = bool(current and _role(current) in {"farmer_admin", "farmer_user"})
-        except Exception:
-            farmer_mode = False
+        farmer_mode = request.cookies.get("acrefit_demo_role") == "farmer"
+        if not farmer_mode:
+            try:
+                current = current_user(request.cookies.get("seediq_session"))
+                farmer_mode = bool(current and current.get("global_role") in {"farmer_admin", "farmer_user"})
+            except Exception:
+                farmer_mode = False
         if farmer_mode:
             products = rows_to_dicts(conn.execute(
                 "SELECT sp.*,NULL::numeric AS list_price,NULL::numeric AS base_price,NULL::numeric AS dealer_cost,"

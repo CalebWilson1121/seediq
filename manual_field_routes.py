@@ -97,6 +97,18 @@ def _reference_boundary(field) -> dict | None:
         return None
 
 
+def _reference_boundary_auto_ready(field) -> bool:
+    meta = _json_obj(field.get("metadata_json"))
+    if not _reference_boundary(field):
+        return False
+    confidence = float(meta.get("geometry_confidence") or 0)
+    return bool(
+        meta.get("geometry_auto_confirm_ready")
+        and meta.get("geometry_validation_status") == "pass"
+        and confidence >= 0.96
+    )
+
+
 def _has_exact_boundary(field_id: int) -> bool:
     with connect() as conn:
         row = conn.execute(
@@ -163,6 +175,16 @@ def confirm_all_reference_boundaries(farm_id: int):
             if not _reference_boundary(field):
                 skipped.append({"field_id": field_id, "name": field.get("name"), "reason": "No valid SOI reference boundary"})
                 continue
+            if not _reference_boundary_auto_ready(field):
+                meta = _json_obj(field.get("metadata_json"))
+                skipped.append({
+                    "field_id": field_id,
+                    "name": field.get("name"),
+                    "reason": "Boundary needs review before auto-confirm",
+                    "geometry_confidence": meta.get("geometry_confidence"),
+                    "geometry_qa_issues": meta.get("geometry_qa_issues") or [],
+                })
+                continue
             try:
                 _confirm_reference_boundary(field)
                 confirmed.append(field_id)
@@ -176,6 +198,7 @@ def confirm_all_reference_boundaries(farm_id: int):
             "already_mapped_count": len(already_mapped),
             "already_mapped_field_ids": already_mapped,
             "skipped_count": len(skipped),
+            "review_count": len([x for x in skipped if x.get("reason") == "Boundary needs review before auto-confirm"]),
             "skipped": skipped,
             "soils_need_refresh": bool(confirmed),
         }

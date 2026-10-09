@@ -156,7 +156,7 @@ def confirm_reference_boundary(field_id: int):
 
 
 @router.post("/api/farms/{farm_id}/boundaries/confirm-all")
-def confirm_all_reference_boundaries(farm_id: int):
+def confirm_all_reference_boundaries(farm_id: int, include_review: bool = False):
     try:
         with connect() as conn:
             farm = conn.execute("SELECT id FROM farms WHERE id=?", (farm_id,)).fetchone()
@@ -175,7 +175,7 @@ def confirm_all_reference_boundaries(farm_id: int):
             if not _reference_boundary(field):
                 skipped.append({"field_id": field_id, "name": field.get("name"), "reason": "No valid SOI reference boundary"})
                 continue
-            if not _reference_boundary_auto_ready(field):
+            if not include_review and not _reference_boundary_auto_ready(field):
                 meta = _json_obj(field.get("metadata_json"))
                 skipped.append({
                     "field_id": field_id,
@@ -199,6 +199,7 @@ def confirm_all_reference_boundaries(farm_id: int):
             "already_mapped_field_ids": already_mapped,
             "skipped_count": len(skipped),
             "review_count": len([x for x in skipped if x.get("reason") == "Boundary needs review before auto-confirm"]),
+            "include_review": bool(include_review),
             "skipped": skipped,
             "soils_need_refresh": bool(confirmed),
         }

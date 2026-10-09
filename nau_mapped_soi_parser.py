@@ -537,12 +537,36 @@ def _match_components(
     pairs.extend(reversed(fallback))
     return pairs
 
+
+def _section_corners(section_geom) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]] | None:
+    """Return NW, NE, SE, SW control points from the actual PLSS section."""
+    try:
+        geom = section_geom
+        if geom.geom_type == "MultiPolygon":
+            geom = max(geom.geoms, key=lambda g: g.area)
+        coords = list(geom.exterior.coords)
+        if len(coords) < 4:
+            return None
+        minx, miny, maxx, maxy = geom.bounds
+        targets = [(minx, maxy), (maxx, maxy), (maxx, miny), (minx, miny)]
+        corners = []
+        for tx, ty in targets:
+            point = min(coords, key=lambda xy: (xy[0] - tx) ** 2 + (xy[1] - ty) ** 2)
+            corners.append((float(point[0]), float(point[1])))
+        if len(set(corners)) < 4:
+            return None
+        return tuple(corners)
+    except Exception:
+        return None
+
+
 def _component_geometry(comp: _RasterComponent, frame_small: tuple[int, int, int, int], section_geojson: dict[str, Any]) -> dict[str, Any] | None:
     left, top, right, bottom = frame_small
     width = max(right - left, 1)
     height = max(bottom - top, 1)
     section = shape(section_geojson)
     min_lon, min_lat, max_lon, max_lat = section.bounds
+    section_corners = _section_corners(section)
     merged: list[tuple[int, int, int, int]] = []
     active: dict[tuple[int, int], tuple[int, int]] = {}
     for y, x1, x2 in sorted(comp.runs):
@@ -562,8 +586,19 @@ def _component_geometry(comp: _RasterComponent, frame_small: tuple[int, int, int
     if pixel_geom.is_empty:
         return None
     def pixel_to_geo(x, y, z=None):
-        lon = min_lon + ((x - left) / width) * (max_lon - min_lon)
-        lat = max_lat - ((y - top) / height) * (max_lat - min_lat)
+        u = min(1.0, max(0.0, (x - left) / width))
+        v = min(1.0, max(0.0, (y - top) / height))
+        if section_corners:
+            nw, ne, se, sw = section_corners
+            top_lon = nw[0] * (1.0 - u) + ne[0] * u
+            top_lat = nw[1] * (1.0 - u) + ne[1] * u
+            bottom_lon = sw[0] * (1.0 - u) + se[0] * u
+            bottom_lat = sw[1] * (1.0 - u) + se[1] * u
+            lon = top_lon * (1.0 - v) + bottom_lon * v
+            lat = top_lat * (1.0 - v) + bottom_lat * v
+            return (lon, lat)
+        lon = min_lon + u * (max_lon - min_lon)
+        lat = max_lat - v * (max_lat - min_lat)
         return (lon, lat)
     geo = transform(pixel_to_geo, pixel_geom)
     try:
@@ -648,8 +683,9 @@ def _apply_page_geometry_qa(fields: list[ParsedField]) -> dict[str, int]:
 
             if method == "acreage_reconciliation" and delta_pct is not None and float(delta_pct) <= 5.0:
                 acres = float(field.acres or 0)
-                competitors = [abs(other - acres) / max(acres, 0.01) for other in source_acres if other != acres]
-                distinctive = not competitors or min(competitors) >= 0.08
+                same_acre_count = sum(1 for other in source_acres if abs(other - acres) < 0.001)
+                competitors = [abs(other - acres) / max(acres, 0.01) for other in source_acres if abs(other - acres) >= 0.001]
+                distinctive = same_acre_count == 1 and (not competitors or min(competitors) >= 0.08)
                 page_tight = page_delta_pct is not None and page_delta_pct <= 5.0 and len(mapped) == len(members)
                 if distinctive and page_tight and not reasons:
                     confidence = max(confidence, 0.97)

@@ -581,6 +581,96 @@ def _component_geometry(comp: _RasterComponent, frame_small: tuple[int, int, int
     return mapping(geo)
 
 
+
+def _apply_page_geometry_qa(fields: list[ParsedField]) -> dict[str, int]:
+    """Cross-check all mapped shapes together and mark only defensible matches auto-ready."""
+    groups: dict[tuple[Any, Any, Any], list[ParsedField]] = {}
+    for field in fields:
+        md = field.metadata or {}
+        groups.setdefault((md.get("source_page"), md.get("legal_section"), md.get("township_range")), []).append(field)
+
+    ready = 0
+    review = 0
+    for _, members in groups.items():
+        mapped = [f for f in members if (f.metadata or {}).get("reference_boundary_geojson")]
+        source_total = sum(float(f.acres or 0) for f in mapped)
+        mapped_total = sum(float((f.metadata or {}).get("reference_boundary_acres") or 0) for f in mapped)
+        page_delta_pct = abs(mapped_total - source_total) / source_total * 100.0 if source_total else None
+
+        issues: dict[int, list[str]] = {id(f): [] for f in mapped}
+        geoms: dict[int, Any] = {}
+        for field in mapped:
+            md = field.metadata or {}
+            try:
+                geom = shape(md.get("reference_boundary_geojson"))
+                if not geom.is_valid:
+                    geom = geom.buffer(0)
+                if geom.is_empty or geom.geom_type not in {"Polygon", "MultiPolygon"}:
+                    issues[id(field)].append("invalid_geometry")
+                else:
+                    geoms[id(field)] = geom
+            except Exception:
+                issues[id(field)].append("invalid_geometry")
+
+        for i, left in enumerate(mapped):
+            gl = geoms.get(id(left))
+            if gl is None:
+                continue
+            for right in mapped[i + 1:]:
+                gr = geoms.get(id(right))
+                if gr is None or not gl.intersects(gr):
+                    continue
+                try:
+                    inter = gl.intersection(gr)
+                    if inter.is_empty:
+                        continue
+                    overlap_acres = _geometry_acres(mapping(inter)) or 0.0
+                    smaller = max(min(float(left.acres or 0), float(right.acres or 0)), 0.01)
+                    if overlap_acres > max(0.75, smaller * 0.04):
+                        issues[id(left)].append("field_overlap")
+                        issues[id(right)].append("field_overlap")
+                except Exception:
+                    continue
+
+        # Acreage-only matches can be promoted only when the acreage is both
+        # exceptionally close and distinctive among fields on that same page.
+        source_acres = [float(f.acres or 0) for f in members if f.acres]
+        for field in mapped:
+            md = field.metadata or {}
+            reasons = issues[id(field)]
+            delta_pct = md.get("reference_acre_delta_pct")
+            method = md.get("geometry_match_method")
+            confidence = float(md.get("geometry_confidence") or 0)
+            if page_delta_pct is not None and page_delta_pct > 15.0:
+                reasons.append("page_acre_reconciliation")
+            if delta_pct is None or float(delta_pct) > 12.0:
+                reasons.append("field_acre_reconciliation")
+
+            if method == "acreage_reconciliation" and delta_pct is not None and float(delta_pct) <= 5.0:
+                acres = float(field.acres or 0)
+                competitors = [abs(other - acres) / max(acres, 0.01) for other in source_acres if other != acres]
+                distinctive = not competitors or min(competitors) >= 0.08
+                page_tight = page_delta_pct is not None and page_delta_pct <= 5.0 and len(mapped) == len(members)
+                if distinctive and page_tight and not reasons:
+                    confidence = max(confidence, 0.97)
+                    md["geometry_confidence"] = round(confidence, 3)
+                    md["geometry_match_method"] = "acreage_unique_page_reconciliation"
+
+            auto_ready = confidence >= 0.96 and not reasons
+            md["page_source_acres"] = round(source_total, 2)
+            md["page_reference_acres"] = round(mapped_total, 2)
+            md["page_acre_delta_pct"] = round(page_delta_pct, 2) if page_delta_pct is not None else None
+            md["geometry_qa_issues"] = sorted(set(reasons))
+            md["geometry_validation_status"] = "pass" if auto_ready else "review"
+            md["geometry_auto_confirm_ready"] = bool(auto_ready)
+            if auto_ready:
+                ready += 1
+            else:
+                review += 1
+
+    return {"auto_ready": ready, "review": review}
+
+
 def _source_crop_year(text: str) -> int | None:
     matches = re.findall(r"\b(20\d{2})\s+Total\s+Prod", text, re.I)
     if matches:
@@ -744,6 +834,7 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
             ):
                 out.facts.append(SourceFact("mapped_soi_field", entity_key, field_name, value, source_locator=f"page:{entry.page}", confidence=1.0))
     out.fields = list(parsed_fields.values())
+    geometry_qa = _apply_page_geometry_qa(out.fields)
     if not out.fields:
         out.warnings.append("Mapped SOI parser did not produce physical fields.")
     elif geometry_matches < len(out.fields):
@@ -752,6 +843,11 @@ def parse_nau_mapped_soi_pdf(path: Path) -> ParsedDocument:
     else:
         high_conf = sum(1 for f in out.fields if (f.metadata or {}).get("geometry_validation_status") == "pass")
         out.warnings.append(f"Mapped SOI extracted {len(out.fields)} physical field identities and raster-georeferenced all reference shapes; {high_conf}/{len(out.fields)} passed high-confidence geometry QA.")
+    if out.fields:
+        out.warnings.append(
+            f"Geometry QA: {geometry_qa.get('auto_ready', 0)}/{len(out.fields)} fields are auto-confirm ready; "
+            f"{geometry_qa.get('review', 0)} require review or stronger source evidence."
+        )
     membership_fields = sum(1 for f in out.fields if (f.metadata or {}).get("insurance_unit_memberships"))
     out.warnings.append(f"Insurance financial/election data was intentionally excluded. Current unit membership was anchored from NAU Total Unit Summary for {membership_fields}/{len(out.fields)} physical fields and is retained only as an APH identity bridge.")
     return out

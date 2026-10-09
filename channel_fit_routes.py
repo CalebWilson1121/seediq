@@ -22,6 +22,12 @@ class AutoPlanRequest(BaseModel):
     overwrite_existing: bool = False
 
 
+class RMPreferenceRequest(BaseModel):
+    crop_year: int = 2027
+    rm_min: float | None = None
+    rm_max: float | None = None
+
+
 def _loads(value: Any, fallback):
     if isinstance(value, (dict, list)):
         return value
@@ -576,6 +582,21 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
         eligible, location_reason, maturity_window = _location_eligibility(
             crop, p.get("relative_maturity"), latitude
         )
+        pref_min = row.get("preferred_rm_min")
+        pref_max = row.get("preferred_rm_max")
+        rm_value = p.get("relative_maturity")
+        rm_preference_eligible = True
+        rm_preference_reason = None
+        if rm_value is not None and (pref_min is not None or pref_max is not None):
+            rm_num = float(rm_value)
+            if pref_min is not None and rm_num < float(pref_min):
+                rm_preference_eligible = False
+            if pref_max is not None and rm_num > float(pref_max):
+                rm_preference_eligible = False
+            if rm_preference_eligible:
+                rm_preference_reason = f"Inside selected RM range ({pref_min if pref_min is not None else 'min'}–{pref_max if pref_max is not None else 'max'})"
+            else:
+                rm_preference_reason = f"Outside selected RM range ({pref_min if pref_min is not None else 'min'}–{pref_max if pref_max is not None else 'max'})"
         score, reasons = _fit_score(
             crop,
             row.get("irrigation"),
@@ -626,6 +647,8 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
         # layer. This avoids score inflation from simply stacking more bonuses.
         score = round(max(0, min(99, legacy_score * 0.72 + float(agronomy["agronomy_score"]) * 0.28)), 1)
         reasons = (agronomy.get("top_reasons") or []) + aph_reasons + management_reasons + trait_reasons + reasons
+        if rm_preference_reason:
+            reasons = [rm_preference_reason] + reasons
         if location_reason:
             reasons = [location_reason] + reasons
 
@@ -664,12 +687,13 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
             "agronomy_source_ids": [s.get("id") for s in agronomy.get("sources", [])],
             "location_eligible": eligible,
             "location_reason": location_reason,
+            "rm_preference_eligible": rm_preference_eligible,
+            "rm_preference_reason": rm_preference_reason,
             "maturity_window": maturity_window,
             "recommended_population": pop,
             "unit_size_seeds": p.get("unit_size_seeds"),
             "list_price": p.get("list_price"),
             "base_price": p.get("base_price"),
-            "dealer_cost": p.get("dealer_cost"),
             "pricing_tier": p.get("pricing_tier"),
             "farmer_price": (
                 round(max(
@@ -692,6 +716,7 @@ def _rank_products(row: dict[str, Any], products: list[dict[str, Any]]) -> list[
     ranked.sort(
         key=lambda x: (
             0 if x["location_eligible"] else 1,
+            0 if x.get("rm_preference_eligible", True) else 1,
             -x["fit_score"],
             abs((x.get("relative_maturity") or 999) - ((x.get("maturity_window") or {}).get("target") or 999)),
             x.get("product_name") or "",
@@ -883,10 +908,10 @@ def channel_plan_insights(farm_id: int, crop_year: int = 2027):
 
 
 @router.get("/api/fields/{field_id}/channel-fit")
-def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
+def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5, rm_min: float | None = None, rm_max: float | None = None):
     with connect() as conn:
         row = conn.execute(
-            "SELECT f.id,f.farm_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,f.metadata_json AS field_metadata_json,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window,cp.crop,cp.yield_goal,cp.target_population,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.id=?",
+            "SELECT f.id,f.farm_id,f.name,f.acres,f.crop AS field_crop,f.irrigation,f.metadata_json AS field_metadata_json,fa.organization_id,fa.default_tillage,fa.default_row_spacing,fa.default_planting_window,cp.crop,cp.yield_goal,cp.target_population,cp.preferred_rm_min,cp.preferred_rm_max,fs.weighted_aws150_cm,fs.weighted_slope_pct,fs.drainage_summary_json,fl.centroid_lat,fl.centroid_lon FROM fields f JOIN farms fa ON fa.id=f.farm_id LEFT JOIN field_crop_plans cp ON cp.field_id=f.id AND cp.crop_year=? LEFT JOIN field_soils fs ON fs.field_id=f.id LEFT JOIN LATERAL (SELECT centroid_lat,centroid_lon FROM field_locations x WHERE x.field_id=f.id ORDER BY x.updated_at DESC NULLS LAST,x.id DESC LIMIT 1) fl ON true WHERE f.id=?",
             (crop_year, field_id),
         ).fetchone()
         if not row:
@@ -910,11 +935,15 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
             (org_id, crop_year, row.get("farm_id"), crop_year, crop_year, crop, org_id, org_id),
         ).fetchall())
     row_dict = dict(row)
+    if rm_min is not None:
+        row_dict["preferred_rm_min"] = float(rm_min)
+    if rm_max is not None:
+        row_dict["preferred_rm_max"] = float(rm_max)
     production_context = _production_context(field_id, crop)
     row_dict["production_context"] = production_context
     row_dict["climate_outlook"] = current_enso_outlook(crop_year)
     ranked = _rank_products(row_dict, products)
-    eligible_ranked = [x for x in ranked if x.get("location_eligible")]
+    eligible_ranked = [x for x in ranked if x.get("location_eligible") and x.get("rm_preference_eligible", True)]
     drainage = _loads(row.get("drainage_summary_json"), {})
     maturity_window = _maturity_window(crop, row.get("centroid_lat"))
     return {
@@ -927,6 +956,10 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
             "awc_0_150cm": row.get("weighted_aws150_cm"), "drainage": drainage,
             "centroid_lat": row.get("centroid_lat"), "centroid_lon": row.get("centroid_lon"),
             "maturity_window": maturity_window,
+            "preferred_rm_range": {
+                "min": row_dict.get("preferred_rm_min"),
+                "max": row_dict.get("preferred_rm_max"),
+            },
             "farm_defaults": {
                 "tillage": row.get("default_tillage"),
                 "row_spacing": row.get("default_row_spacing"),
@@ -938,9 +971,49 @@ def channel_fit(field_id: int, crop_year: int = 2027, limit: int = 5):
         "agronomy_engine": {"version": AGRONOMY_ENGINE_VERSION, "source_count": rules_catalog()["source_count"]},
         "population_note": "Population is a AcreFit planning recommendation, not a Bayer/Channel prescription. Dealer/agronomist should confirm locally.",
         "catalog_product_count": len(ranked),
-        "location_eligible_count": len(eligible_ranked),
+        "location_eligible_count": len([x for x in ranked if x.get("location_eligible")]),
+        "rm_eligible_count": len(eligible_ranked),
+        "preferred_rm_range": {
+            "min": row_dict.get("preferred_rm_min"),
+            "max": row_dict.get("preferred_rm_max"),
+        },
         "recommendations": eligible_ranked[:max(1, min(limit, 5))],
         "all_options": ranked,
+    }
+
+
+@router.put("/api/fields/{field_id}/rm-preference")
+def set_field_rm_preference(field_id: int, req: RMPreferenceRequest):
+    rm_min = float(req.rm_min) if req.rm_min is not None else None
+    rm_max = float(req.rm_max) if req.rm_max is not None else None
+    if rm_min is not None and rm_max is not None and rm_min > rm_max:
+        raise HTTPException(status_code=400, detail="Minimum RM cannot be greater than maximum RM")
+    if rm_min is not None and not 0 <= rm_min <= 130:
+        raise HTTPException(status_code=400, detail="Minimum RM is outside the supported range")
+    if rm_max is not None and not 0 <= rm_max <= 130:
+        raise HTTPException(status_code=400, detail="Maximum RM is outside the supported range")
+    with connect() as conn:
+        field = conn.execute("SELECT id FROM fields WHERE id=?", (field_id,)).fetchone()
+        if not field:
+            raise HTTPException(status_code=404, detail="Field not found")
+        existing = conn.execute(
+            "SELECT id FROM field_crop_plans WHERE field_id=? AND crop_year=?",
+            (field_id, req.crop_year),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE field_crop_plans SET preferred_rm_min=?,preferred_rm_max=?,updated_at=CURRENT_TIMESTAMP WHERE field_id=? AND crop_year=?",
+                (rm_min, rm_max, field_id, req.crop_year),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO field_crop_plans(field_id,crop_year,preferred_rm_min,preferred_rm_max,source,status) VALUES(?,?,?,?,?,?)",
+                (field_id, req.crop_year, rm_min, rm_max, "rm_preference", "planning"),
+            )
+    return {
+        "field_id": field_id,
+        "crop_year": req.crop_year,
+        "preferred_rm_range": {"min": rm_min, "max": rm_max},
     }
 
 

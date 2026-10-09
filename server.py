@@ -566,6 +566,58 @@ def farmer_dashboard(request: Request, crop_year: int = 2027):
     return {"organization_name": org_name, "crop_year": crop_year, "summary": summary, "farms": farms}
 
 
+@app.get("/api/farmer/farms/{farm_id}/history")
+def farmer_farm_history(farm_id: int, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    if _role(user) not in {"farmer_admin", "farmer_user", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Farmer access required")
+    with connect() as conn:
+        _require_farm_access(conn, farm_id, user)
+        farm = conn.execute(
+            "SELECT id,farm_name,producer_name,state,county FROM farms WHERE id=?",
+            (farm_id,),
+        ).fetchone()
+        fields = rows_to_dicts(conn.execute(
+            "SELECT id,name,acres,crop,practice,irrigation FROM fields WHERE farm_id=? ORDER BY name",
+            (farm_id,),
+        ).fetchall())
+        history = rows_to_dicts(conn.execute(
+            "SELECT cr.id,cr.field_id,f.name AS field_name,cr.crop_year,cr.crop,cr.practice,"
+            "cr.planted_acres,cr.production,cr.yield_value,cr.approved_yield,"
+            "sp.id AS seed_product_id,sp.brand AS seed_brand,sp.product_name AS seed_product_name,"
+            "sp.relative_maturity,cp.target_population "
+            "FROM crop_records cr "
+            "LEFT JOIN fields f ON f.id=cr.field_id "
+            "LEFT JOIN field_crop_plans cp ON cp.field_id=cr.field_id AND cp.crop_year=cr.crop_year "
+            "LEFT JOIN seed_products sp ON sp.id=cp.selected_seed_product_id "
+            "WHERE cr.farm_id=? ORDER BY cr.crop_year DESC,f.name,cr.id DESC",
+            (farm_id,),
+        ).fetchall())
+        receipts = rows_to_dicts(conn.execute(
+            "SELECT id,original_name,document_type,status,uploaded_at,parsed_at "
+            "FROM documents WHERE farm_id=? AND upper(COALESCE(document_type,''))='SEED_RECEIPT' "
+            "ORDER BY uploaded_at DESC",
+            (farm_id,),
+        ).fetchall())
+    by_field = {}
+    for row in history:
+        fid = row.get("field_id")
+        if fid is None:
+            continue
+        prior = by_field.get(fid)
+        current_yield = row.get("yield_value")
+        row["prior_yield"] = prior
+        if current_yield is not None and prior not in (None, 0):
+            row["yield_change_pct"] = round((float(current_yield) - float(prior)) / float(prior) * 100.0, 1)
+        else:
+            row["yield_change_pct"] = None
+        if current_yield is not None:
+            by_field[fid] = float(current_yield)
+    return {"farm": row_to_dict(farm), "fields": fields, "history": history, "receipts": receipts}
+
+
 @app.get("/api/admin/overview")
 def get_admin_overview(request: Request):
     _require(request, "super_admin")
@@ -1215,7 +1267,7 @@ def root(request: Request):
 
 @app.api_route("/{page_name}.html", methods=["GET", "HEAD"])
 def html_page(page_name: str):
-    allowed = {"index", "login", "farmer-login", "farmer-dashboard", "admin", "dealer-demo", "salesperson-profile", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "pricing", "product-spec", "data-hub"}
+    allowed = {"index", "login", "farmer-login", "farmer-dashboard", "farmer-history", "admin", "dealer-demo", "salesperson-profile", "farmers", "field-analysis", "whole-farm-plan", "genetics", "prospects", "prospect-detail", "sales-packet", "pipeline", "pricing", "product-spec", "data-hub"}
     if page_name not in allowed: raise HTTPException(status_code=404)
     return FileResponse(BASE / f"{page_name}.html")
 

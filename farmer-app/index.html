@@ -25,6 +25,7 @@
 <a data-view="fields" href="#fields">Fields & Mapping</a>
 <a data-view="analysis" href="#analysis">Field Analysis</a>
 <a data-view="plan" href="#plan">Annual Crop Plan</a>
+<a data-view="bestplan" href="#bestplan">Best Seed Plan</a>
 <a data-view="history" href="#history">Planting & Performance</a>
 <a data-view="genetics" href="#genetics">Seed Genetics</a>
 <a data-view="data" href="#data">Farm Data Hub</a>
@@ -41,6 +42,7 @@
 <section id="fields" class="view"></section>
 <section id="analysis" class="view"></section>
 <section id="plan" class="view"></section>
+<section id="bestplan" class="view"></section>
 <section id="history" class="view"></section>
 <section id="genetics" class="view"></section>
 <section id="data" class="view"></section>
@@ -51,7 +53,7 @@
 <script>
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const fmt=(v,d=0)=>v==null?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
-const state={year:2027,dash:null,farm:null,prospect:null,plans:[],fields:[],soils:[],history:null,selectedField:null,fit:null,map:null,draw:false,drawPts:[]};
+const state={year:2027,dash:null,farm:null,prospect:null,plans:[],fields:[],soils:[],history:null,selectedField:null,fit:null,bestPlan:[],bestPlanStatus:'idle',map:null,draw:false,drawPts:[]};
 async function api(path,o={}){const r=await fetch(path,o);let d={};try{d=await r.json()}catch{}if(r.status===401){location='/farmer-login.html';throw Error('Sign in required')}if(!r.ok)throw Error(d.detail||('HTTP '+r.status));return d}
 function activeView(){return (location.hash||'#overview').slice(1)}
 function syncNav(){const v=activeView();document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active',a.dataset.view===v));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===v))}
@@ -77,12 +79,12 @@ async function loadFarm(id){
   state.plans=p.fields||[];
   state.history=await api('/api/farmer/farms/'+state.farm.id+'/history').catch(()=>({history:[],receipts:[]}));
   if(!state.selectedField||!state.fields.some(f=>Number(f.id)===Number(state.selectedField)))state.selectedField=state.fields[0]?.id||null;
-  state.fit=null;
+  state.fit=null;state.bestPlan=[];state.bestPlanStatus='idle';
 }
 function soilFor(id){return state.soils.find(x=>Number(x.field_id)===Number(id))||{}}
 function planFor(id){return state.plans.find(x=>Number(x.field_id)===Number(id))||{}}
 function fieldFor(id){return state.fields.find(x=>Number(x.id)===Number(id))||{}}
-function renderAll(){renderOverview();renderFields();renderAnalysis();renderPlan();renderHistory();renderGenetics();renderData();syncNav()}
+function renderAll(){renderOverview();renderFields();renderAnalysis();renderPlan();renderBestPlan();renderHistory();renderGenetics();renderData();syncNav()}
 function renderOverview(){
  const s=state.dash.summary||{},n=Math.max(1,Number(s.fields||0)),pp=Math.round(Number(s.planned||0)/n*100),sp=Math.round(Number(s.seed_selected||0)/n*100);
  overview.innerHTML='<div class="row"><div><div class="eyebrow">FARM ORGANIZATION</div><h1>'+esc(state.dash.organization_name)+'</h1><div class="muted">'+state.year+' planning year</div></div></div>'+
@@ -133,17 +135,78 @@ async function runAnalysis(fid){if(document.getElementById('rmMin'))await api('/
 async function chooseSeed(fid,seed,pop){const p=planFor(fid),crop=String(p.crop||fieldFor(fid).crop||'').toUpperCase();await api('/api/fields/'+fid+'/seed-plan',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:state.year,yield_goal:p.yield_goal??null,target_population:pop,seed_product_id:seed,seed_price_per_unit:null,seeds_per_unit:crop==='CORN'?80000:140000,pricing_source:'farmer'})});await loadFarm(state.farm.id);state.selectedField=fid;await loadFit(fid);renderAll()}
 function renderPlan(){
  const planned=state.plans.filter(x=>x.crop).length,seeded=state.plans.filter(x=>x.selected_seed_product_id||x.selected_seed_name).length;
- plan.innerHTML='<div class="row"><div><div class="eyebrow">ANNUAL CROP PLAN</div><h1>Plan the whole farm.</h1><div class="muted">Rotation first. Genetics second. Keep manual choices where you want them.</div></div><div><button class="btn secondary" onclick="rotateAll()">Rotate from '+(state.year-1)+'</button> <button class="btn" onclick="autoPlan()">Auto-fill Missing Genetics</button></div></div>'+
+ plan.innerHTML='<div class="row"><div><div class="eyebrow">ANNUAL CROP PLAN</div><h1>Plan the whole farm.</h1><div class="muted">Rotation first. Genetics second. Keep manual choices where you want them.</div></div><div><button class="btn secondary" onclick="rotateAll()">Rotate from '+(state.year-1)+'</button> <button class="btn" onclick="location.hash='#bestplan';renderBestPlan()">Build Best Seed Plan</button></div></div>'+
  '<div class="grid three" style="margin:16px 0"><div class="card"><div class="muted">Fields</div><div class="metric">'+state.plans.length+'</div></div><div class="card"><div class="muted">Crop Assigned</div><div class="metric">'+planned+'</div></div><div class="card"><div class="muted">Seed Selected</div><div class="metric">'+seeded+'</div></div></div>'+
  '<div class="card"><div style="overflow:auto"><table class="table"><thead><tr><th>Field</th><th>Acres</th><th>Water</th><th>Crop</th><th>Brand / Seed</th><th>Population</th><th></th></tr></thead><tbody>'+state.plans.map(r=>'<tr><td><b>'+esc(r.name||r.field_name||('Field '+r.field_id))+'</b></td><td>'+fmt(r.acres,1)+'</td><td>'+esc(r.irrigation||'—')+'</td><td><select class="select" onchange="setCrop('+r.field_id+',this.value)"><option value="">—</option><option value="CORN" '+(r.crop==='CORN'?'selected':'')+'>Corn</option><option value="SOYBEANS" '+(r.crop==='SOYBEANS'?'selected':'')+'>Soybeans</option></select></td><td>'+(r.selected_seed_name?'<b>'+esc([r.selected_seed_brand,r.selected_seed_name].filter(Boolean).join(' '))+'</b>':'<span class="muted">Not selected</span>')+'</td><td>'+fmt(r.target_population)+'</td><td><button class="btn small secondary" onclick="state.selectedField='+r.field_id+';state.fit=null;location.hash=\'#analysis\';renderAnalysis()">Review Field</button></td></tr>').join('')+'</tbody></table></div></div>';
+}
+
+function bestReason(r){
+ const parts=[];
+ if(Array.isArray(r?.reasons)) parts.push(...r.reasons.filter(x=>typeof x==='string'));
+ if(Array.isArray(r?.agronomy_rules_fired)) parts.push(...r.agronomy_rules_fired.map(x=>typeof x==='string'?x:(x?.evidence||x?.label||'')).filter(Boolean));
+ if(r?.location_reason) parts.push(r.location_reason);
+ return parts.filter(Boolean).slice(0,2).join(' • ')||'Best eligible fit from the current AcreFit catalog.';
+}
+function renderBestPlan(){
+ const planned=state.plans.filter(r=>r.crop);
+ const rows=state.bestPlan||[];
+ const ready=rows.filter(r=>r.recommendation);
+ bestplan.innerHTML='<div class="row"><div><div class="eyebrow">WHOLE-FARM RECOMMENDATION</div><h1>Best Brand + Variety by Field</h1><div class="muted">AcreFit compares all eligible brands for each field, then surfaces the highest-fit product. Review the plan before applying anything.</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" onclick="buildBestPlan()" '+(state.bestPlanStatus==='running'?'disabled':'')+'>'+(state.bestPlanStatus==='running'?'Analyzing…':'Analyze Whole Farm')+'</button>'+(ready.length?'<button class="btn" onclick="applyBestPlan(false)">Apply to Unselected Fields</button><button class="btn outline" onclick="applyBestPlan(true)">Replace All with Best Fit</button>':'')+'</div></div>'+
+ '<div class="grid three" style="margin:16px 0"><div class="card"><div class="muted">Crop-Planned Fields</div><div class="metric">'+planned.length+'</div></div><div class="card"><div class="muted">Recommendations Ready</div><div class="metric">'+ready.length+'</div></div><div class="card"><div class="muted">Different Brands Chosen</div><div class="metric">'+new Set(ready.map(x=>x.recommendation?.brand).filter(Boolean)).size+'</div></div></div>'+
+ (state.bestPlanStatus==='idle'?'<div class="hero"><div class="eyebrow" style="color:#dce9df">CROSS-BRAND WHOLE-FARM PLACEMENT</div><h2 style="margin-top:7px">Let AcreFit build the first draft.</h2><p>Each field is screened independently against crop, maturity range, location, soils, water environment, APH/history and available product definitions. Nothing is applied until you approve it.</p></div>':
+ rows.length?'<div class="card"><div style="overflow:auto"><table class="table"><thead><tr><th>Field</th><th>Crop</th><th>Acres</th><th>Best Brand</th><th>Best Variety / Hybrid</th><th>RM</th><th>Fit</th><th>Population</th><th>Why</th><th>Current</th></tr></thead><tbody>'+
+ rows.map(x=>{const r=x.recommendation,p=x.plan||{};return '<tr><td><b>'+esc(x.field?.name||p.name||('Field '+x.field_id))+'</b></td><td>'+esc(p.crop||'—')+'</td><td>'+fmt(x.field?.acres||p.acres,1)+'</td>'+(r?'<td><b>'+esc(r.brand||'—')+'</b></td><td><b>'+esc(r.product_name||'—')+'</b></td><td>'+fmt(r.relative_maturity,2)+'</td><td><span class="tag">'+Number(r.fit_score||0).toFixed(0)+'%</span></td><td>'+fmt(r.recommended_population)+'</td><td class="muted" style="min-width:260px">'+esc(bestReason(r))+'</td>':'<td colspan="6"><span class="tag warn">No eligible recommendation</span></td>')+'<td>'+(p.selected_seed_name?esc([p.selected_seed_brand,p.selected_seed_name].filter(Boolean).join(' ')):'Not selected')+'</td></tr>'}).join('')+
+ '</tbody></table></div></div>':'<div class="callout warn">No crop-planned fields were available to analyze.</div>');
+}
+async function buildBestPlan(){
+ state.bestPlanStatus='running';state.bestPlan=[];renderBestPlan();
+ const fields=state.plans.filter(r=>r.crop);
+ const out=[];
+ for(const p of fields){
+   const f=fieldFor(p.field_id)||{};
+   try{
+     const fit=await api('/api/fields/'+p.field_id+'/channel-fit?crop_year='+state.year+'&limit=200');
+     const eligible=(fit.all_options||fit.recommendations||[]).filter(r=>r.location_eligible!==false&&r.rm_preference_eligible!==false);
+     eligible.sort((a,b)=>Number(b.fit_score||0)-Number(a.fit_score||0));
+     out.push({field_id:p.field_id,field:f,plan:p,recommendation:eligible[0]||null});
+   }catch(e){
+     out.push({field_id:p.field_id,field:f,plan:p,recommendation:null,error:e.message});
+   }
+   state.bestPlan=[...out];renderBestPlan();
+ }
+ state.bestPlanStatus='ready';renderBestPlan();
+}
+async function applyBestPlan(overwrite){
+ const chosen=(state.bestPlan||[]).filter(x=>x.recommendation&&(overwrite||!x.plan?.selected_seed_product_id));
+ if(!chosen.length)return alert(overwrite?'No recommendations are ready.':'Every recommended field already has a seed selection.');
+ const msg=overwrite?'Replace current seed selections on '+chosen.length+' fields with AcreFit\'s current best-fit recommendations?':'Apply AcreFit recommendations to '+chosen.length+' currently unselected fields?';
+ if(!confirm(msg))return;
+ let applied=0,failed=0;
+ for(const x of chosen){
+   const r=x.recommendation,p=x.plan||{},crop=String(p.crop||'').toUpperCase();
+   try{
+     await api('/api/fields/'+x.field_id+'/seed-plan',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:state.year,yield_goal:p.yield_goal??null,target_population:r.recommended_population??p.target_population??null,seed_product_id:r.seed_product_id,seed_price_per_unit:null,seeds_per_unit:crop==='CORN'?80000:140000,pricing_source:'farmer-whole-farm-best-fit'})});
+     applied++;
+   }catch(e){failed++}
+ }
+ await loadFarm(state.farm.id);renderAll();location.hash='#bestplan';
+ alert(applied+' field recommendations applied'+(failed?' • '+failed+' failed':'')+'.');
 }
 async function rotateAll(){await api('/api/farms/'+state.farm.id+'/rotate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from_year:state.year-1,to_year:state.year})});await loadFarm(state.farm.id);renderAll()}
 async function autoPlan(){if(!confirm('Fill only fields that do not already have a seed selection?'))return;await api('/api/farms/'+state.farm.id+'/channel-auto-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({crop_year:state.year,overwrite_existing:false})});await loadFarm(state.farm.id);renderAll()}
 function renderHistory(){
- const h=state.history?.history||[],receipts=state.history?.receipts||[];
- history.innerHTML='<div><div class="eyebrow">PLANTING & PERFORMANCE</div><h1>What worked on this farm?</h1><div class="muted">Keep varieties, APH and realized yield tied to the field over time.</div></div>'+
- '<div class="grid two" style="margin-top:16px"><div class="card"><h2>Field History</h2><div style="overflow:auto"><table class="table"><thead><tr><th>Year</th><th>Field</th><th>Crop</th><th>Seed</th><th>Yield</th><th>Vs Prior</th></tr></thead><tbody>'+h.map(r=>'<tr><td><b>'+esc(r.crop_year||'—')+'</b></td><td>'+esc(r.field_name||'—')+'</td><td>'+esc(r.crop||'—')+'</td><td>'+esc([r.seed_brand,r.seed_product_name].filter(Boolean).join(' ')||'Not recorded')+'</td><td><b>'+(r.yield_value==null?'—':Number(r.yield_value).toFixed(1))+'</b></td><td>'+(r.yield_change_pct==null?'—':(Number(r.yield_change_pct)>0?'+':'')+Number(r.yield_change_pct).toFixed(1)+'%')+'</td></tr>').join('')+'</tbody></table></div></div>'+
- '<div><div class="card"><h2>Seed Receipt Upload</h2><div class="upload"><input id="receiptFile" type="file" accept=".pdf,.csv,.xlsx,.xlsm,.txt"><button class="btn" style="margin-top:10px" onclick="uploadReceipt()">Upload Receipt</button></div><div id="receiptMsg" class="muted" style="margin-top:8px"></div></div><div class="card" style="margin-top:14px"><h2>Receipt Archive</h2>'+(receipts.length?receipts.map(r=>'<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>'+esc(r.original_name)+'</b><div class="muted" style="font-size:11px">'+esc(r.uploaded_at||'')+'</div></div>').join(''):'<div class="muted">No receipts uploaded yet.</div>')+'</div></div></div>';
+ try{
+  const raw=state.history&&typeof state.history==='object'?state.history:{};
+  const h=Array.isArray(raw.history)?raw.history:[];
+  const receipts=Array.isArray(raw.receipts)?raw.receipts:[];
+  const safeNum=v=>{const n=Number(v);return Number.isFinite(n)?n:null};
+  history.innerHTML='<div><div class="eyebrow">PLANTING & PERFORMANCE</div><h1>What worked on this farm?</h1><div class="muted">Track the genetics planted on each field and compare them with realized yield over time.</div></div>'+
+  '<div class="grid three" style="margin:16px 0"><div class="card"><div class="muted">Historical Records</div><div class="metric">'+h.length+'</div></div><div class="card"><div class="muted">Seed Receipts</div><div class="metric">'+receipts.length+'</div></div><div class="card"><div class="muted">Fields with Recorded Seed</div><div class="metric">'+new Set(h.filter(r=>r&&r.seed_product_name).map(r=>r.field_id)).size+'</div></div></div>'+
+  '<div class="grid two"><div class="card"><h2>Field History</h2><div style="overflow:auto">'+(h.length?'<table class="table"><thead><tr><th>Year</th><th>Field</th><th>Crop</th><th>Brand / Seed</th><th>Yield</th><th>Vs Prior</th></tr></thead><tbody>'+h.map(r=>{r=r||{};const y=safeNum(r.yield_value),chg=safeNum(r.yield_change_pct);return '<tr><td><b>'+esc(r.crop_year??'—')+'</b></td><td>'+esc(r.field_name||'—')+'</td><td>'+esc(r.crop||'—')+'</td><td>'+esc([r.seed_brand,r.seed_product_name].filter(Boolean).join(' ')||'Not recorded')+'</td><td><b>'+(y==null?'—':y.toFixed(1))+'</b></td><td>'+(chg==null?'—':(chg>0?'+':'')+chg.toFixed(1)+'%')+'</td></tr>'}).join('')+'</tbody></table>':'<div class="empty">No historical field performance has been recorded yet. This page will build as planting and harvest results are added.</div>')+'</div></div>'+
+  '<div><div class="card"><h2>Seed Receipt Upload</h2><div class="upload"><input id="receiptFile" type="file" accept=".pdf,.csv,.xlsx,.xlsm,.txt"><button class="btn" style="margin-top:10px" onclick="uploadReceipt()">Upload Receipt</button></div><div id="receiptMsg" class="muted" style="margin-top:8px"></div></div><div class="card" style="margin-top:14px"><h2>Receipt Archive</h2>'+(receipts.length?receipts.map(r=>{r=r||{};return '<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>'+esc(r.original_name||'Seed receipt')+'</b><div class="muted" style="font-size:11px">'+esc(r.uploaded_at||'')+'</div></div>'}).join(''):'<div class="muted">No receipts uploaded yet.</div>')+'</div></div></div>';
+ }catch(e){
+  history.innerHTML='<div><div class="eyebrow">PLANTING & PERFORMANCE</div><h1>Planting & Performance</h1></div><div class="callout warn" style="margin-top:16px"><b>Performance data could not be rendered.</b><br>'+esc(e?.message||'Unknown display error')+'</div>';
+ }
 }
 async function uploadReceipt(){const file=receiptFile.files[0];if(!file)return alert('Choose a receipt.');const fd=new FormData();fd.append('file',file);fd.append('document_type','SEED_RECEIPT');fd.append('target_farm_id',String(state.farm.id));receiptMsg.textContent='Uploading…';try{await api('/api/documents/upload',{method:'POST',body:fd});receiptMsg.textContent='Receipt saved.';await loadFarm(state.farm.id);renderAll()}catch(e){receiptMsg.textContent=e.message}}
 function renderGenetics(){
